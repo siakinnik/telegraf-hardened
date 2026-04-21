@@ -15,7 +15,7 @@ import { URL } from 'url'
 const debug = require('debug')('telegraf:client')
 const { isStream } = MultipartStream
 import { Readable } from 'stream'
-import { FetchClient } from './FetchClient'
+import { FetchClient } from '@telegraf-hardened/fetch'
 
 const WEBHOOK_REPLY_METHOD_ALLOWLIST = new Set<keyof Telegram>([
     'answerCallbackQuery',
