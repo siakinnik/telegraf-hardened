@@ -101,9 +101,7 @@
     "p-timeout": "^4.1.0",
     "safe-compare": "^1.1.4",
     "sandwich-stream": "^2.0.2",
-    "socks": "^2.8.7",
-    "tls": "^0.0.1",
-    "undici": "^7.25.0"
+    "tls": "^0.0.1"
   },
   "devDependencies": {
     "@types/debug": "^4.1.8",
