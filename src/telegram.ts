@@ -42,8 +42,9 @@ export class Telegram extends ApiClient {
         }
 
         return new URL(
-            `./file/${this.options.apiMode}${this.token}${this.options.testEnv ? '/test' : ''
-            // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+            `./file/${this.options.apiMode}${this.token}${
+                this.options.testEnv ? '/test' : ''
+                // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
             }/${fileId.file_path!}`,
             this.options.apiRoot
         )
@@ -430,12 +431,12 @@ export class Telegram extends ApiClient {
     }
 
     /**
-  * Send paid media to channel chats. On success, the sent Message is returned.
-  * @param chatId Unique identifier for the target chat or username of the target channel (in the format @channelusername)
-  * @param media A JSON-serialized array describing photos and videos to be sent, must include up to 10 items.
-  * @param starCount The number of Telegram Stars that must be paid to buy access to the media
-  * @param extra Additional parameters for the message.
-  */
+     * Send paid media to channel chats. On success, the sent Message is returned.
+     * @param chatId Unique identifier for the target chat or username of the target channel (in the format @channelusername)
+     * @param media A JSON-serialized array describing photos and videos to be sent, must include up to 10 items.
+     * @param starCount The number of Telegram Stars that must be paid to buy access to the media
+     * @param extra Additional parameters for the message.
+     */
     sendPaidMedia(
         chatId: number | string,
         media: tg.Opts<'sendPaidMedia'>['media'],
@@ -1684,11 +1685,11 @@ export class Telegram extends ApiClient {
         })
     }
     /**
-      * Returns the bot's Telegram Star transactions in chronological order.
-      * @param offset
-      * @param limit
-      * @returns StarTransactions
-      */
+     * Returns the bot's Telegram Star transactions in chronological order.
+     * @param offset
+     * @param limit
+     * @returns StarTransactions
+     */
     getStarTransactions(offset?: number, limit?: number) {
         return this.callApi('getStarTransactions', { offset, limit })
     }
