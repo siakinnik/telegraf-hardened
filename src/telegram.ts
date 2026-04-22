@@ -42,9 +42,8 @@ export class Telegram extends ApiClient {
         }
 
         return new URL(
-            `./file/${this.options.apiMode}${this.token}${
-                this.options.testEnv ? '/test' : ''
-                // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+            `./file/${this.options.apiMode}${this.token}${this.options.testEnv ? '/test' : ''
+            // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
             }/${fileId.file_path!}`,
             this.options.apiRoot
         )
@@ -426,6 +425,27 @@ export class Telegram extends ApiClient {
         return this.callApi('sendVoice', {
             chat_id: chatId,
             voice,
+            ...fmtCaption(extra),
+        })
+    }
+
+    /**
+  * Send paid media to channel chats. On success, the sent Message is returned.
+  * @param chatId Unique identifier for the target chat or username of the target channel (in the format @channelusername)
+  * @param media A JSON-serialized array describing photos and videos to be sent, must include up to 10 items.
+  * @param starCount The number of Telegram Stars that must be paid to buy access to the media
+  * @param extra Additional parameters for the message.
+  */
+    sendPaidMedia(
+        chatId: number | string,
+        media: tg.Opts<'sendPaidMedia'>['media'],
+        starCount: number,
+        extra?: tt.ExtraPaidMedia
+    ) {
+        return this.callApi('sendPaidMedia', {
+            chat_id: chatId,
+            media,
+            star_count: starCount,
             ...fmtCaption(extra),
         })
     }
@@ -1663,7 +1683,26 @@ export class Telegram extends ApiClient {
             for_channels: forChannels,
         })
     }
+    /**
+      * Returns the bot's Telegram Star transactions in chronological order.
+      * @param offset
+      * @param limit
+      * @returns StarTransactions
+      */
+    getStarTransactions(offset?: number, limit?: number) {
+        return this.callApi('getStarTransactions', { offset, limit })
+    }
 
+    /**
+     * Refunds a successful payment in Telegram Stars.
+     * @returns true on success
+     */
+    refundStarPayment(userId: number, telegramPaymentChargeId: number) {
+        return this.callApi('refundStarPayment', {
+            user_id: userId,
+            telegram_payment_charge_id: telegramPaymentChargeId.toString(),
+        })
+    }
     /**
      * Log out from the cloud Bot API server before launching the bot locally.
      */
