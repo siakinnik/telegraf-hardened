@@ -113,6 +113,11 @@ const bot = new Telegraf(process.env.BOT_TOKEN, {
 -   `http/https/fastify/Connect.js/express.js` compatible webhooks
 -   Extensible
 
+## 📖 Documentation
+
+The complete documentation for `telegraf-hardened` is available at:
+👉 **[telegraf-docs.telegraf-hardened.org](https://github.com/telegraf-hardened/telegraf-docs)** > *Note: We are currently updating the docs to include all the new Hardened features like Native Fetch and Telegram Stars.*
+
 ### Example
 
 ```js
