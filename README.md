@@ -103,8 +103,8 @@ const bot = new Telegraf(process.env.BOT_TOKEN, {
 ### Features
 
 -   Full [Telegram Bot API 7.8](https://core.telegram.org/bots/api) support
--   [Excellent TypeScript typings](https://github.com/telegraf/telegraf/releases/tag/v4.0.0)
--   [Lightweight](https://packagephobia.com/result?p=telegraf,node-telegram-bot-api)
+-   [Excellent TypeScript typings](https://github.com/telegraf-hardened/telegraf-hardened/releases/tag/v5.0.0-beta.3)
+-   [Lightweight](https://packagephobia.com/result?p=telegraf-hardened,node-telegram-bot-api)
 -   [AWS **λ**](https://docs.aws.amazon.com/lambda/latest/dg/nodejs-prog-model-handler.html)
     / [Firebase](https://firebase.google.com/products/functions/)
     / [Glitch](https://glitch.com/edit/#!/dashing-light)
@@ -239,8 +239,8 @@ Here is a list of
 #### Shorthand methods
 
 ```js
-import { Telegraf } from 'telegraf'
-import { message } from 'telegraf/filters'
+import { Telegraf } from 'telegraf-hardened'
+import { message } from 'telegraf-hardened/filters'
 
 const bot = new Telegraf(process.env.BOT_TOKEN)
 
@@ -292,8 +292,8 @@ process.once('SIGTERM', () => bot.stop('SIGTERM'))
 ### Webhooks
 
 ```TS
-import { Telegraf } from "telegraf";
-import { message } from 'telegraf/filters';
+import { Telegraf } from "telegraf-hardened";
+import { message } from 'telegraf-hardened/filters';
 
 const bot = new Telegraf(token);
 
@@ -407,8 +407,8 @@ As in Koa and some other middleware-based libraries,
 `await next()` will call next middleware and wait for it to finish:
 
 ```TS
-import { Telegraf } from 'telegraf';
-import { message } from 'telegraf/filters';
+import { Telegraf } from 'telegraf-hardened';
+import { message } from 'telegraf-hardened/filters';
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
 
@@ -432,7 +432,6 @@ With this simple ability, you can:
 -   extract information from updates and then `await next()` to avoid disrupting other middleware,
 -   like [`Composer`] and [`Router`], `await next()` for updates you don't wish to handle,
 -   like [`session`] and [`Scenes`], [extend the context](#extending-context) by mutating `ctx` before `await next()`,
--   [intercept API calls](https://github.com/telegraf/telegraf/discussions/1267#discussioncomment-254525),
 -   reuse [other people's code](https://www.npmjs.com/search?q=telegraf-),
 -   do whatever **you** come up with!
 
@@ -457,7 +456,7 @@ Consequently, you can change the type of `ctx` to fit your needs in order for yo
 This is done through Generics:
 
 ```ts
-import { Context, Telegraf } from 'telegraf'
+import { Context, Telegraf } from 'telegraf-hardened'
 
 // Define your own context type
 interface MyContext extends Context {
