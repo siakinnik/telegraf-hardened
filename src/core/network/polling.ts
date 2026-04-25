@@ -4,6 +4,7 @@ import ApiClient from './client'
 import d from 'debug'
 import { promisify } from 'util'
 import { TelegramError } from './error'
+import type { Telegraf } from '../../telegraf'
 const debug = d('telegraf:polling')
 const wait = promisify(setTimeout)
 function always<T>(x: T) {
@@ -15,10 +16,12 @@ export class Polling {
     private readonly abortController = new AbortController()
     private skipOffsetSync = false
     private offset = 0
+    private retryCount = 0
     constructor(
         private readonly telegram: ApiClient,
-        private readonly allowedUpdates: readonly tt.UpdateType[]
-    ) {}
+        private readonly allowedUpdates: readonly tt.UpdateType[],
+        private readonly options: Telegraf.LaunchOptions['polling'] = {}
+    ) { }
 
     private async *[Symbol.asyncIterator]() {
         debug('Starting long polling')
@@ -33,6 +36,8 @@ export class Polling {
                     },
                     { signal: this.abortController.signal as AbortSignal }
                 )
+
+                this.retryCount = 0
                 const last = updates[updates.length - 1]
                 if (last !== undefined) {
                     this.offset = last.update_id + 1
@@ -45,6 +50,28 @@ export class Polling {
                 }
 
                 if (err.name === 'AbortError') return
+
+                if (
+                    err instanceof TelegramError &&
+                    err.code === 409 &&
+                    this.options?.retryOnConflict
+                ) {
+                    const maxDelay = this.options.maxRetryDelay ?? 60000
+                    const delay = Math.min(
+                        Math.pow(2, this.retryCount++) * 1000,
+                        maxDelay
+                    )
+
+                    debug(
+                        '409 Conflict detected (likely old connection still open). Retrying in %dms (Attempt %d)',
+                        delay,
+                        this.retryCount
+                    )
+
+                    await wait(delay)
+                    continue
+                }
+
                 if (
                     err.name === 'FetchError' ||
                     err.message.includes('fetch failed') ||
