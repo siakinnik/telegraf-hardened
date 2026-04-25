@@ -46,11 +46,11 @@ export namespace Telegraf {
         allowedUpdates?: tt.UpdateType[]
         /** Configuration options for when the bot is run via webhooks */
         polling?: {
-            /** * Whether to retry on 409 Conflict errors (e.g., after bot restart) 
+            /** * Whether to retry on 409 Conflict errors (e.g., after bot restart)
              * @default false
              */
             retryOnConflict?: boolean
-            /** * Maximum delay for exponential backoff in milliseconds 
+            /** * Maximum delay for exponential backoff in milliseconds
              * @default 60000 (1 minute)
              */
             maxRetryDelay?: number
@@ -262,7 +262,10 @@ export class Telegraf<C extends Context = Context> extends Composer<C> {
         })
     }
 
-    private startPolling(allowedUpdates: tt.UpdateType[] = [], options: Telegraf.LaunchOptions['polling'] = {}) {
+    private startPolling(
+        allowedUpdates: tt.UpdateType[] = [],
+        options: Telegraf.LaunchOptions['polling'] = {}
+    ) {
         this.polling = new Polling(this.telegram, allowedUpdates, options)
         return this.polling.loop(async (update) => {
             await this.handleUpdate(update)
@@ -379,7 +382,7 @@ export class Telegraf<C extends Context = Context> extends Composer<C> {
                 'Update %d is waiting for `botInfo` to be initialized',
                 update.update_id
             ),
-                await (this.botInfoCall ??= this.telegram.getMe()))
+            await (this.botInfoCall ??= this.telegram.getMe()))
         debug('Processing update', update.update_id)
         const tg = new Telegram(
             this.token,

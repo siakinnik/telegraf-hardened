@@ -21,7 +21,7 @@ export class Polling {
         private readonly telegram: ApiClient,
         private readonly allowedUpdates: readonly tt.UpdateType[],
         private readonly options: Telegraf.LaunchOptions['polling'] = {}
-    ) { }
+    ) {}
 
     private async *[Symbol.asyncIterator]() {
         debug('Starting long polling')

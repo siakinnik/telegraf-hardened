@@ -26,9 +26,11 @@ This fork exists and improves thanks to the amazing contributors:
 ## 🛠 Roadmap & Community Fixes
 
 ### 🎯 Current Status: v1 Strategic Roadmap Fully Closed ✅
-Version: 🚀 **v5.0.0 Stable** | 🛡 **Hardened** 
-Closed Roadmaps: 
-- **[Strategic Roadmap v1](https://github.com/telegraf-hardened/telegraf-hardened/issues/1)**
+
+Version: 🚀 **v5.0.0 Stable** | 🛡 **Hardened**
+Closed Roadmaps:
+
+-   **[Strategic Roadmap v1](https://github.com/telegraf-hardened/telegraf-hardened/issues/1)**
 
 We have successfully integrated all planned critical improvements from the community that were abandoned by the official Telegraf upstream. **Telegraf-hardened is now a feature-complete and stable alternative.**
 
