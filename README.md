@@ -9,7 +9,7 @@ Telegraf-hardened - Community-led fork of Telegraf.js. Focusing on stability, st
 
 <p>Modern Telegram Bot API framework for Node.js</p>
 
-<a href="https://core.telegram.org/bots/api">
+<a href="https://core.telegram.org/bots/api">   
     <img src="https://img.shields.io/badge/Bot%20API-v7.8-f36caf.svg?style=flat-square" alt="Bot API Version" />
 </a>
 </div>
@@ -39,6 +39,10 @@ Check our current active Roadmap **[Roadmap v2](https://github.com/telegraf-hard
 ### Key Improvements in this Fork already done:
 
 -   🛠 **Future:** Even stricter type validation & community-requested features.
+-   ✅ **Resilience: 409 Conflict Retry:**
+    -   Optional exponential backoff for `getUpdates` requests.
+    -   Prevents bot crash-loops during Docker/PM2 restarts when the previous connection is still active.
+    -   Opt-in via `bot.launch({ polling: { retryOnConflict: true } })`.
 -   ✅ **Native Telegram Stars Support (API 7.8):**
     -   Full support for digital goods, star transactions, and paid media.
     -   `sendPaidMedia()` — Send exclusive content for stars.
@@ -163,7 +167,12 @@ const bot = new Telegraf(process.env.BOT_TOKEN)(async () => {
     await bot.validateTokenAsync()
     bot.command('oldschool', (ctx) => ctx.reply('Hello'))
     bot.command('hipster', Telegraf.reply('λ'))
-    bot.launch()
+    bot.launch({
+        polling: {
+        retryOnConflict: true, // Enable exponential backoff on 409 errors
+        maxRetryDelay: 30000,  // Cap retry delay at 30 seconds (default 60s)
+    },
+    )
 })()
 
 // Enable graceful stop
@@ -292,7 +301,12 @@ bot.on('inline_query', async (ctx) => {
     await ctx.answerInlineQuery(result)
 })
 
-bot.launch()
+bot.launch({
+    polling: {
+        retryOnConflict: true, // Enable exponential backoff on 409 errors
+        maxRetryDelay: 30000, // Cap retry delay at 30 seconds (default 60s)
+    },
+})
 
 // Enable graceful stop
 process.once('SIGINT', () => bot.stop('SIGINT'))
@@ -300,6 +314,18 @@ process.once('SIGTERM', () => bot.stop('SIGTERM'))
 ```
 
 ## Production
+
+### Production Resilience (Long Polling)
+
+In production environments (Docker, PM2, K8s), a quick restart might trigger a `409: Conflict` error because Telegram keeps the previous connection open for a short timeout. Telegraf-hardened can handle this automatically:
+
+````ts
+bot.launch({
+  polling: {
+    retryOnConflict: true, // Enable exponential backoff on 409 errors
+    maxRetryDelay: 30000,  // Cap retry delay at 30 seconds (default 60s)
+  },
+});
 
 ### Webhooks
 
@@ -329,7 +355,7 @@ bot.launch({
     secretToken: randomAlphaNumericString,
   },
 });
-```
+````
 
 Use `createWebhook()` if you want to attach Telegraf to an existing http server.
 
