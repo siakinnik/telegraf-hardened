@@ -19,6 +19,7 @@ Telegraf-hardened - Community-led fork of Telegraf.js. Focusing on stability, st
 ## ❤️ Special Thanks
 
 This fork exists and improves thanks to the amazing contributors:
+
 -   **[@Leask](https://github.com/Leask)** - Full Bot API 9.6 sync, modernization of the entire network stack, and bulletproof API-sync testing.
 -   **[@BataevDaniil](https://github.com/BataevDaniil)** - Architect of the `custom-fetch` feature.
 -   **[@clansty](https://github.com/clansty)** - Critical JSON serialization and thumbnail fixes.
@@ -165,7 +166,8 @@ const bot = new Telegraf(process.env.BOT_TOKEN)
             ctx.from.id
         )
         return ctx.reply(`You have ${total_count} gifts!`)
-    п   })
+        п
+    })
     bot.launch()
 })()
 

@@ -424,23 +424,45 @@ function withCause(error: Error, cause: Error) {
     return error
 }
 
-function redactToken(error: Error): never {
-    const redact = (value: string) =>
-        value.replace(/\/(bot|user)(\d+):[^/]+\//, '/$1$2:[REDACTED]/')
-    const message = redact(error.message)
-    const stack = error.stack ? redact(error.stack) : undefined
-    const redacted =
-        setErrorField(error, 'message', message) &&
-        (stack === undefined || setErrorField(error, 'stack', stack))
-    if (redacted) {
-        throw error
+function redactToken(error: any): never {
+    const tokenPattern = /(\d+):[A-Za-z0-9_-]{20,}/g
+
+    const redact = (value: any): any => {
+        if (typeof value !== 'string') return value
+        return value.replace(tokenPattern, '$1:[REDACTED]')
     }
-    const fallback = withCause(new Error(message), error)
-    fallback.name = error.name
-    if (stack !== undefined) {
-        setErrorField(fallback, 'stack', stack)
+
+    const proto = Object.getPrototypeOf(error)
+    const copy = Object.create(proto)
+
+    // 2. Копируем все свойства объекта ошибки
+    for (const key of Object.getOwnPropertyNames(error)) {
+        const desc = Object.getOwnPropertyDescriptor(error, key)
+        if (!desc) continue
+
+        if (typeof desc.value === 'string') {
+            desc.value = redact(desc.value)
+        } else if (key === 'response' || key === 'on') {
+            desc.value = JSON.parse(redact(JSON.stringify(desc.value)))
+        }
+        if (key === 'message') desc.value = redact(error.message)
+        if (key === 'stack') desc.value = redact(error.stack)
+
+        try {
+            Object.defineProperty(copy, key, desc)
+        } catch (e) {}
     }
-    throw fallback
+
+    if (Object.prototype.hasOwnProperty.call(error, 'constructor')) {
+        Object.defineProperty(copy, 'constructor', {
+            value: error.constructor,
+            enumerable: false,
+            configurable: true,
+            writable: true,
+        })
+    }
+
+    throw copy
 }
 
 type Response = http.ServerResponse
