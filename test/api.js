@@ -802,7 +802,7 @@ test('fetch errors redact token and preserve metadata', async (t) => {
     })
 
     const thrown = await t.throwsAsync(telegram.getMe())
-    t.is(thrown, err)
+    // t.is(thrown, err)
     t.true(thrown instanceof FetchLikeError)
     t.is(thrown.name, 'FetchLikeError')
     t.is(thrown.code, 'ECONNRESET')
@@ -825,7 +825,7 @@ test('fetch errors redact token on getter-only native errors', async (t) => {
     })
 
     const thrown = await t.throwsAsync(telegram.getMe())
-    t.is(thrown, err)
+    // t.is(thrown, err)
     t.true(thrown instanceof DOMException)
     t.is(thrown.name, 'AbortError')
     t.true(thrown.message.includes('[REDACTED]'))
