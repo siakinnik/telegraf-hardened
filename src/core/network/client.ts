@@ -389,41 +389,6 @@ async function answerToWebhook(
     return true
 }
 
-function setErrorField(
-    error: Error,
-    key: 'message' | 'stack',
-    value: string | undefined
-) {
-    try {
-        error[key] = value as never
-        return true
-    } catch {
-        try {
-            Object.defineProperty(error, key, {
-                value,
-                configurable: true,
-                writable: true,
-            })
-            return true
-        } catch {
-            return false
-        }
-    }
-}
-
-function withCause(error: Error, cause: Error) {
-    try {
-        Object.defineProperty(error, 'cause', {
-            value: cause,
-            configurable: true,
-            writable: true,
-        })
-    } catch {
-        // Ignore: this is only a best-effort fallback when redacting native errors.
-    }
-    return error
-}
-
 function redactToken(error: any): never {
     const tokenPattern = /(\d+):[A-Za-z0-9_-]{20,}/g
 
@@ -432,27 +397,46 @@ function redactToken(error: any): never {
         return value.replace(tokenPattern, '$1:[REDACTED]')
     }
 
+    if (!error || typeof error !== 'object') throw error
+
     const proto = Object.getPrototypeOf(error)
     const copy = Object.create(proto)
 
-    // 2. Копируем все свойства объекта ошибки
     for (const key of Object.getOwnPropertyNames(error)) {
         const desc = Object.getOwnPropertyDescriptor(error, key)
         if (!desc) continue
 
-        if (typeof desc.value === 'string') {
-            desc.value = redact(desc.value)
-        } else if (key === 'response' || key === 'on') {
-            desc.value = JSON.parse(redact(JSON.stringify(desc.value)))
+        // If it's a message or stack (which might be getters),
+        // we convert them to plain data properties
+        if (
+            key === 'message' ||
+            key === 'stack' ||
+            typeof desc.value === 'string'
+        ) {
+            const rawValue =
+                key === 'message' || key === 'stack' ? error[key] : desc.value
+            desc.value = redact(rawValue)
+            // Crucial: remove accessors to avoid TypeError
+            delete desc.get
+            delete desc.set
+            desc.writable = true
+            desc.configurable = true
+        } else if ((key === 'response' || key === 'on') && desc.value != null) {
+            try {
+                desc.value = JSON.parse(redact(JSON.stringify(desc.value)))
+            } catch (e) {
+                // Keep original if redaction fails
+            }
         }
-        if (key === 'message') desc.value = redact(error.message)
-        if (key === 'stack') desc.value = redact(error.stack)
 
         try {
             Object.defineProperty(copy, key, desc)
-        } catch (e) {}
+        } catch (e) {
+            // Ignore non-configurable properties
+        }
     }
 
+    // Restore constructor for instanceof checks
     if (Object.prototype.hasOwnProperty.call(error, 'constructor')) {
         Object.defineProperty(copy, 'constructor', {
             value: error.constructor,

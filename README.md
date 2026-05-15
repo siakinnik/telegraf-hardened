@@ -166,7 +166,6 @@ const bot = new Telegraf(process.env.BOT_TOKEN)
             ctx.from.id
         )
         return ctx.reply(`You have ${total_count} gifts!`)
-        п
     })
     bot.launch()
 })()
