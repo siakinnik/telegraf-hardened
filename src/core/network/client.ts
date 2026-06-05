@@ -407,8 +407,27 @@ function redactToken(error: any): never {
     const redactedError = new Error(redact(originalMessage), { cause: error })
 
     // 3. Copy the error name (e.g., 'AbortError' or 'TelegramError')
-    redactedError.name = error.name || 'Error'
-    redactedError.stack = redact(originalStack)
+    // Use Object.defineProperty to override potential native getters with data descriptors
+    Object.defineProperty(redactedError, 'name', {
+        value: error.name || 'Error',
+        enumerable: false,
+        configurable: true,
+        writable: true,
+    })
+    Object.defineProperty(redactedError, 'message', {
+        value: redact(originalMessage),
+        enumerable: true,
+        configurable: true,
+        writable: true,
+    })
+    if (originalStack) {
+        Object.defineProperty(redactedError, 'stack', {
+            value: redact(originalStack),
+            enumerable: false,
+            configurable: true,
+            writable: true,
+        })
+    }
 
     // 4. Copy additional properties (response, on and so on), if they exist
     for (const key of Object.getOwnPropertyNames(error)) {
@@ -431,12 +450,8 @@ function redactToken(error: any): never {
         }
     }
 
-    // for test `thrown instanceof DOMException` in ../test/api.js
-    if (error instanceof DOMException) {
-        Object.setPrototypeOf(redactedError, DOMException.prototype)
-    } else if (error instanceof TypeError) {
-        Object.setPrototypeOf(redactedError, TypeError.prototype)
-    }
+    // Dynamic prototype preservation to support `instanceof FetchLikeError`, `instanceof DOMException`, etc.
+    Object.setPrototypeOf(redactedError, Object.getPrototypeOf(error))
 
     throw redactedError
 }
