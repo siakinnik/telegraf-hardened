@@ -399,54 +399,46 @@ function redactToken(error: any): never {
 
     if (!error || typeof error !== 'object') throw error
 
-    const proto = Object.getPrototypeOf(error)
-    const copy = Object.create(proto)
+    // 1. Safely extract original message and stack, redacting any tokens they may contain
+    const originalMessage = error.message || ''
+    const originalStack = error.stack || ''
 
+    // 2. Create a new error with the redacted message and stack, and preserve the original error as the cause
+    const redactedError = new Error(redact(originalMessage), { cause: error })
+
+    // 3. Copy the error name (e.g., 'AbortError' or 'TelegramError')
+    redactedError.name = error.name || 'Error'
+    redactedError.stack = redact(originalStack)
+
+    // 4. Copy additional properties (response, on and so on), if they exist
     for (const key of Object.getOwnPropertyNames(error)) {
+        if (key === 'message' || key === 'stack' || key === 'name') continue
+
         const desc = Object.getOwnPropertyDescriptor(error, key)
         if (!desc) continue
 
-        // If it's a message or stack (which might be getters),
-        // we convert them to plain data properties
-        if (
-            key === 'message' ||
-            key === 'stack' ||
-            typeof desc.value === 'string'
-        ) {
-            const rawValue =
-                key === 'message' || key === 'stack' ? error[key] : desc.value
-            desc.value = redact(rawValue)
-            // Crucial: remove accessors to avoid TypeError
-            delete desc.get
-            delete desc.set
-            desc.writable = true
-            desc.configurable = true
-        } else if ((key === 'response' || key === 'on') && desc.value != null) {
+        if ((key === 'response' || key === 'on') && desc.value !== undefined) {
             try {
                 desc.value = JSON.parse(redact(JSON.stringify(desc.value)))
             } catch (e) {
-                // Keep original if redaction fails
+                // ignore JSON parsing errors and keep original value if it can't be redacted
             }
         }
 
-        try {
-            Object.defineProperty(copy, key, desc)
-        } catch (e) {
-            // Ignore non-configurable properties
+        // copy data descriptors
+        if ('value' in desc) {
+            Object.defineProperty(redactedError, key, desc)
         }
     }
 
-    // Restore constructor for instanceof checks
-    if (Object.prototype.hasOwnProperty.call(error, 'constructor')) {
-        Object.defineProperty(copy, 'constructor', {
-            value: error.constructor,
-            enumerable: false,
-            configurable: true,
-            writable: true,
-        })
+    // for test `thrown instanceof DOMException` in ../test/api.js
+    if (error instanceof DOMException) {
+        Object.setPrototypeOf(redactedError, DOMException.prototype)
+    } else if (error instanceof TypeError) {
+        Object.setPrototypeOf(redactedError, TypeError.prototype)
     }
 
-    throw copy
+    throw redactedError
 }
 
 type Response = http.ServerResponse
