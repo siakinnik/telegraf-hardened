@@ -1,5 +1,10 @@
 const test = require('ava')
-const { Telegraf, TelegramError, session } = require('../')
+const {
+    Telegraf,
+    TelegrafNetworkError,
+    TelegramError,
+    session,
+} = require('../')
 
 function createBot(...args) {
     let [token = '123:abc', options = {}] = args
@@ -21,9 +26,20 @@ function createBot(...args) {
 }
 
 function abortError() {
-    const err = new Error('aborted')
-    err.name = 'AbortError'
-    return err
+    return new TelegrafNetworkError(
+        'Network request failed for getUpdates: aborted',
+        {
+            method: 'getUpdates',
+            apiRoot: 'https://api.telegram.org',
+            apiMode: 'bot',
+            testEnv: false,
+        },
+        {
+            cause: new Error('aborted'),
+            errorName: 'AbortError',
+            transient: false,
+        }
+    )
 }
 
 function stubPollingApi(bot, { conflictOnce = false, onUpdateCall } = {}) {
@@ -369,6 +385,51 @@ test('polling conflict stays fatal by default', async (t) => {
     t.true(err instanceof TelegramError)
     t.is(err.code, 409)
     t.is(updateCalls(), 1)
+})
+
+test('polling does not retry permanent network errors', async (t) => {
+    const bot = createBot('token')
+    let updateCalls = 0
+    bot.telegram.callApi = async (method, payload) => {
+        if (method === 'getMe') {
+            return {
+                id: 42,
+                is_bot: true,
+                username: 'bot',
+                first_name: 'Bot',
+            }
+        }
+        if (method === 'deleteWebhook') {
+            return true
+        }
+        if (method !== 'getUpdates') {
+            return true
+        }
+        if (payload.limit === 1) {
+            return []
+        }
+        updateCalls++
+        throw new TelegrafNetworkError(
+            'Network request failed for getUpdates: TLS failed',
+            {
+                method: 'getUpdates',
+                apiRoot: 'https://api.telegram.org',
+                apiMode: 'bot',
+                testEnv: false,
+            },
+            {
+                code: 'DEPTH_ZERO_SELF_SIGNED_CERT',
+                errorName: 'Error',
+                transient: false,
+            }
+        )
+    }
+
+    const err = await t.throwsAsync(bot.launch())
+
+    t.true(err instanceof TelegrafNetworkError)
+    t.is(err.code, 'DEPTH_ZERO_SELF_SIGNED_CERT')
+    t.is(updateCalls, 1)
 })
 
 test('ctx.entities() should return entities from message', (t) => {

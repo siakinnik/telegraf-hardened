@@ -10,7 +10,7 @@ import { hasProp } from '../helpers/check'
 import { InputFile, Opts, Telegram } from '../types/typegram'
 import { compactOptions } from '../helpers/compact'
 import MultipartStream from './multipart-stream'
-import TelegramError from './error'
+import TelegramError, { TelegrafNetworkError } from './error'
 import { URL } from 'url'
 const debug = d('telegraf:client')
 const { isStream } = MultipartStream
@@ -398,58 +398,170 @@ async function answerToWebhook(
     return true
 }
 
-function setErrorField(
-    error: Error,
-    key: 'message' | 'stack',
-    value: string | undefined
-) {
+const TRANSIENT_NETWORK_CODES = new Set([
+    'ECONNRESET',
+    'ECONNREFUSED',
+    'ETIMEDOUT',
+    'EAI_AGAIN',
+    'ENOTFOUND',
+    'ENETUNREACH',
+    'EHOSTUNREACH',
+    'UND_ERR_BODY_TIMEOUT',
+    'UND_ERR_CONNECT_TIMEOUT',
+    'UND_ERR_HEADERS_TIMEOUT',
+    'UND_ERR_SOCKET',
+])
+
+const MAX_CAUSE_DEPTH = 4
+
+function redactToken(value: string): string
+function redactToken<T>(value: T): T
+function redactToken(value: unknown) {
+    if (typeof value !== 'string') return value
+    return value
+        .replace(/\/(bot|user)(\d+):[^/\s]+(?=\/|$)/g, '/$1$2:[REDACTED]')
+        .replace(/\b(\d{5,}):[A-Za-z0-9_-]{20,}\b/g, '$1:[REDACTED]')
+}
+
+function errorString(error: unknown, key: 'message' | 'name' | 'stack') {
+    if (!error || typeof error !== 'object') return undefined
+    let value: unknown
     try {
-        error[key] = value as never
+        value = (error as Record<string, unknown>)[key]
+    } catch {
+        return undefined
+    }
+    return typeof value === 'string' ? value : undefined
+}
+
+function errorCode(error: unknown) {
+    if (!error || typeof error !== 'object') return undefined
+    let value: unknown
+    try {
+        value = (error as { code?: unknown }).code
+    } catch {
+        return undefined
+    }
+    return typeof value === 'string' || typeof value === 'number'
+        ? value
+        : undefined
+}
+
+function errorName(error: unknown) {
+    const name = errorString(error, 'name')
+    return name && name !== 'Error' ? name : undefined
+}
+
+function errorCause(error: unknown) {
+    if (!error || typeof error !== 'object') return undefined
+    try {
+        return (error as { cause?: unknown }).cause
+    } catch {
+        return undefined
+    }
+}
+
+function isTransientNetworkError(
+    error: unknown,
+    seen = new WeakSet<object>()
+): boolean {
+    if (!error || typeof error !== 'object') return false
+    if (seen.has(error)) return false
+    seen.add(error)
+
+    const code = errorCode(error)
+    if (typeof code === 'string' && TRANSIENT_NETWORK_CODES.has(code)) {
         return true
-    } catch {
-        try {
-            Object.defineProperty(error, key, {
-                value,
-                configurable: true,
-                writable: true,
-            })
-            return true
-        } catch {
-            return false
-        }
     }
+
+    const cause = errorCause(error)
+    return isTransientNetworkError(cause, seen)
 }
 
-function withCause(error: Error, cause: Error) {
+function sanitizeObject(value: object, seen: WeakSet<object>, depth: number) {
+    if (depth >= MAX_CAUSE_DEPTH) return '[Object]'
+    const clean: Record<string, unknown> = {}
+    let keys: string[]
     try {
-        Object.defineProperty(error, 'cause', {
-            value: cause,
-            configurable: true,
-            writable: true,
-        })
+        keys = Object.getOwnPropertyNames(value)
     } catch {
-        // Ignore: this is only a best-effort fallback when redacting native errors.
+        return '[Uninspectable object]'
     }
-    return error
+
+    for (const key of keys) {
+        let desc: PropertyDescriptor | undefined
+        try {
+            desc = Object.getOwnPropertyDescriptor(value, key)
+        } catch {
+            clean[key] = '[Uninspectable property]'
+            continue
+        }
+        if (!desc) continue
+        clean[key] =
+            'value' in desc
+                ? sanitizeCause(desc.value, seen, depth + 1)
+                : '[Getter]'
+    }
+    return clean
 }
 
-function redactToken(error: Error): never {
-    const redact = (value: string) =>
-        value.replace(/\/(bot|user)(\d+):[^/]+\//, '/$1$2:[REDACTED]/')
-    const message = redact(error.message)
-    const stack = error.stack ? redact(error.stack) : undefined
-    const redacted =
-        setErrorField(error, 'message', message) &&
-        (stack === undefined || setErrorField(error, 'stack', stack))
-    if (redacted) {
-        throw error
+function sanitizeCause(
+    error: unknown,
+    seen = new WeakSet<object>(),
+    depth = 0
+): unknown {
+    if (typeof error === 'string') return redactToken(error)
+    if (!error || typeof error !== 'object') return error
+    if (seen.has(error)) return '[Circular]'
+    seen.add(error)
+    if (!(error instanceof Error)) return sanitizeObject(error, seen, depth)
+
+    const cause = errorCause(error)
+    const options =
+        cause === undefined
+            ? undefined
+            : { cause: sanitizeCause(cause, seen, depth + 1) }
+    const message = errorString(error, 'message') ?? errorName(error) ?? 'Error'
+    const safe = new Error(redactToken(message), options)
+    safe.name = errorString(error, 'name') ?? 'Error'
+    const stack = errorString(error, 'stack')
+    if (stack) safe.stack = redactToken(stack)
+
+    const code = errorCode(error)
+    if (code !== undefined) {
+        Object.defineProperty(safe, 'code', {
+            value: code,
+            writable: true,
+            enumerable: true,
+            configurable: true,
+        })
     }
-    const fallback = withCause(new Error(message), error)
-    fallback.name = error.name
-    if (stack !== undefined) {
-        setErrorField(fallback, 'stack', stack)
-    }
-    throw fallback
+    return safe
+}
+
+function networkError<M extends keyof Telegram>(
+    method: M,
+    options: ApiClient.Options,
+    error: unknown
+): never {
+    const message =
+        typeof error === 'string' ? error : errorString(error, 'message')
+    const detail = message ? `: ${redactToken(message)}` : ''
+    throw new TelegrafNetworkError(
+        `Network request failed for ${String(method)}${detail}`,
+        {
+            method: String(method),
+            apiRoot: options.apiRoot,
+            apiMode: options.apiMode,
+            testEnv: options.testEnv,
+        },
+        {
+            cause: sanitizeCause(error),
+            code: errorCode(error),
+            errorName: errorName(error),
+            transient: isTransientNetworkError(error),
+        }
+    )
 }
 
 type Response = http.ServerResponse
@@ -548,7 +660,7 @@ class ApiClient {
             apiUrl,
             config,
             options.requestTimeout
-        ).catch(redactToken)
+        ).catch((error: unknown) => networkError(method, options, error))
         if (res.status >= 500) {
             const errorPayload = {
                 error_code: res.status,

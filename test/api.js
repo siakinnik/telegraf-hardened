@@ -3,9 +3,10 @@ const { execFileSync } = require('child_process')
 const os = require('os')
 const fs = require('fs')
 const path = require('path')
+const util = require('util')
 const ts = require('typescript')
 const test = require('ava')
-const { Context, Input, Telegram } = require('../')
+const { Context, Input, TelegrafNetworkError, Telegram } = require('../')
 
 function readTypeFile(name) {
     const typesRoot = path.dirname(
@@ -776,10 +777,14 @@ test('request timeout aborts fetch calls', async (t) => {
     })
 
     const err = await t.throwsAsync(telegram.getMe())
-    t.is(err.name, 'AbortError')
+    t.true(err instanceof TelegrafNetworkError)
+    t.is(err.code, undefined)
+    t.is(err.errorName, 'AbortError')
+    t.false(err.transient)
+    t.is(err.cause.name, 'AbortError')
 })
 
-test('fetch errors redact token and preserve metadata', async (t) => {
+test('fetch errors use safe network error boundary', async (t) => {
     class FetchLikeError extends Error {
         constructor(message, options) {
             super(message, options)
@@ -802,17 +807,37 @@ test('fetch errors redact token and preserve metadata', async (t) => {
     })
 
     const thrown = await t.throwsAsync(telegram.getMe())
-    t.is(thrown, err)
-    t.true(thrown instanceof FetchLikeError)
-    t.is(thrown.name, 'FetchLikeError')
+    t.true(thrown instanceof TelegrafNetworkError)
+    t.false(thrown instanceof FetchLikeError)
+    t.is(thrown.name, 'TelegrafNetworkError')
     t.is(thrown.code, 'ECONNRESET')
-    t.is(thrown.cause, cause)
+    t.is(thrown.errorName, 'FetchLikeError')
+    t.true(thrown.transient)
+    t.is(thrown.method, 'getMe')
+    t.deepEqual(thrown.request, {
+        method: 'getMe',
+        apiRoot: 'https://api.telegram.org',
+        apiMode: 'bot',
+        testEnv: false,
+    })
     t.true(thrown.message.includes('[REDACTED]'))
     t.false(thrown.message.includes('secret'))
     t.false(thrown.stack.includes('secret'))
+    t.is(thrown.cause.name, 'FetchLikeError')
+    t.is(thrown.cause.code, 'ECONNRESET')
+    thrown.cause.code = 'CHANGED'
+    t.is(thrown.cause.code, 'CHANGED')
+    t.true(thrown.cause.message.includes('[REDACTED]'))
+    t.false(thrown.cause.message.includes('secret'))
+    t.false(thrown.cause.stack.includes('secret'))
+    t.is(thrown.cause.cause.message, cause.message)
+    t.true(err.message.includes('secret'))
+
+    const inspected = util.inspect(thrown, { depth: 5 })
+    t.false(inspected.includes('secret'))
 })
 
-test('fetch errors redact token on getter-only native errors', async (t) => {
+test('native fetch errors use safe network error boundary', async (t) => {
     const err = new DOMException(
         'request to https://api.telegram.org/bot123:secret/getMe failed',
         'AbortError'
@@ -825,12 +850,52 @@ test('fetch errors redact token on getter-only native errors', async (t) => {
     })
 
     const thrown = await t.throwsAsync(telegram.getMe())
-    t.is(thrown, err)
-    t.true(thrown instanceof DOMException)
-    t.is(thrown.name, 'AbortError')
+    t.true(thrown instanceof TelegrafNetworkError)
+    t.false(thrown instanceof DOMException)
+    t.is(thrown.name, 'TelegrafNetworkError')
+    t.is(thrown.code, 20)
+    t.is(thrown.errorName, 'AbortError')
+    t.false(thrown.transient)
     t.true(thrown.message.includes('[REDACTED]'))
     t.false(thrown.message.includes('secret'))
     t.false(thrown.stack.includes('secret'))
+    t.is(thrown.cause.name, 'AbortError')
+    t.true(thrown.cause.message.includes('[REDACTED]'))
+    t.false(thrown.cause.message.includes('secret'))
+    t.false(thrown.cause.stack.includes('secret'))
+    t.true(err.message.includes('secret'))
+
+    const inspected = util.inspect(thrown, { depth: 5 })
+    t.false(inspected.includes('secret'))
+})
+
+test('plain object fetch errors are sanitized before exposure', async (t) => {
+    const err = {
+        message: 'request to https://api.telegram.org/bot123:secret/getMe failed',
+        stack: 'Error: https://api.telegram.org/bot123:secret/getMe',
+        details: {
+            url: 'https://api.telegram.org/bot123:secret/getMe',
+        },
+        self: undefined,
+    }
+    err.self = err
+
+    const telegram = new Telegram('123:secret', {
+        fetch: async () => {
+            throw err
+        },
+    })
+
+    const thrown = await t.throwsAsync(telegram.getMe())
+    t.true(thrown instanceof TelegrafNetworkError)
+    t.true(thrown.message.includes('[REDACTED]'))
+    t.false(thrown.message.includes('secret'))
+    t.true(thrown.cause.message.includes('[REDACTED]'))
+    t.true(thrown.cause.details.url.includes('[REDACTED]'))
+    t.is(thrown.cause.self, '[Circular]')
+
+    const inspected = util.inspect(thrown, { depth: 5 })
+    t.false(inspected.includes('secret'))
 })
 
 test('native fetch is accepted as telegram fetch type', (t) => {

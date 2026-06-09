@@ -3,7 +3,7 @@ import * as tt from '../../telegram-types'
 import ApiClient from './client'
 import d from 'debug'
 import { promisify } from 'util'
-import { TelegramError } from './error'
+import { TelegrafNetworkError, TelegramError } from './error'
 import type { Telegraf } from '../../telegraf'
 const debug = d('telegraf:polling')
 const wait = promisify(setTimeout)
@@ -51,7 +51,12 @@ export class Polling {
                     code?: string | number
                 }
 
-                if (err.name === 'AbortError') return
+                if (
+                    err instanceof TelegrafNetworkError &&
+                    err.errorName === 'AbortError'
+                ) {
+                    return
+                }
 
                 if (
                     err instanceof TelegramError &&
@@ -81,14 +86,14 @@ export class Polling {
                 }
 
                 if (
-                    err.name === 'FetchError' ||
-                    err.message.includes('fetch failed') ||
-                    err.code === 'ECONNRESET' ||
-                    err.code === 'ETIMEDOUT' ||
+                    (err instanceof TelegrafNetworkError && err.transient) ||
                     (err instanceof TelegramError && err.code === 429) ||
                     (err instanceof TelegramError && err.code >= 500)
                 ) {
-                    const retryAfter: number = err.parameters?.retry_after ?? 5
+                    const retryAfter =
+                        err instanceof TelegramError
+                            ? err.parameters?.retry_after ?? 5
+                            : 5
                     debug(
                         'Failed to fetch updates, retrying after %ds.',
                         retryAfter,
