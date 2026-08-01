@@ -1,4 +1,5 @@
-> **Note:** Development is currently paused until September 2026. Read more in [Discussions](#link).
+> **Note:** Sorry for the lack of updates this summer! Development is temporarily paused until September 2026. Read the full status update in [Discussions](https://github.com/telegraf-hardened/telegraf-hardened/discussions/29).
+
 <header>
 
 <div align="center">
