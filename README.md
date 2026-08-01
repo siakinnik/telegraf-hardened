@@ -1,3 +1,4 @@
+> **Note:** Development is currently paused until September 2026. Read more in [Discussions](#link).
 <header>
 
 <div align="center">
