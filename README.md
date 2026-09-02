@@ -1,4 +1,4 @@
-> **Note:** Sorry for the lack of updates this summer! Development is temporarily paused until September 2026. Read the full status update in [Discussions](https://github.com/telegraf-hardened/telegraf-hardened/discussions/29).
+> **Update (September 2026):** Active development has resumed! WIP: API 10.3
 
 <header>
 
