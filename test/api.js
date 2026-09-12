@@ -249,6 +249,231 @@ test('Context exposes business update helpers', async (t) => {
     ])
 })
 
+test('Telegram ephemeral message methods build Bot API payloads', async (t) => {
+    const { bold } = require('../format')
+    const calls = []
+    const telegram = new Telegram('token')
+    telegram.callApi = (method, payload) => {
+        calls.push([method, payload])
+        return true
+    }
+    const markup = { inline_keyboard: [[{ text: 'ok', callback_data: 'ok' }]] }
+    const ephemeral = { receiver_user_id: 7, callback_query_id: 'cbq-1' }
+
+    await telegram.sendMessage(42, 'hi', {
+        ephemeral_message_parameters: ephemeral,
+    })
+    await telegram.sendPhoto(42, 'photo-id', {
+        caption: 'pic',
+        ephemeral_message_parameters: ephemeral,
+    })
+    await telegram.editEphemeralMessageText(42, 'eph-1', bold('new'), {
+        reply_markup: markup,
+    })
+    await telegram.editEphemeralMessageCaption(42, 'eph-1', 'caption')
+    await telegram.editEphemeralMessageMedia(42, 'eph-1', {
+        type: 'photo',
+        media: 'photo-id',
+        caption: bold('media'),
+    })
+    await telegram.editEphemeralMessageReplyMarkup(42, 'eph-1', markup)
+    await telegram.deleteEphemeralMessage(42, 'eph-1')
+
+    const boldEntities = (length) => [{ type: 'bold', offset: 0, length }]
+    t.deepEqual(calls, [
+        [
+            'sendMessage',
+            {
+                chat_id: 42,
+                ephemeral_message_parameters: ephemeral,
+                text: 'hi',
+            },
+        ],
+        [
+            'sendPhoto',
+            {
+                chat_id: 42,
+                photo: 'photo-id',
+                caption: 'pic',
+                ephemeral_message_parameters: ephemeral,
+            },
+        ],
+        [
+            'editEphemeralMessageText',
+            {
+                chat_id: 42,
+                ephemeral_message_id: 'eph-1',
+                reply_markup: markup,
+                text: 'new',
+                entities: boldEntities(3),
+                parse_mode: undefined,
+            },
+        ],
+        [
+            'editEphemeralMessageCaption',
+            { chat_id: 42, ephemeral_message_id: 'eph-1', caption: 'caption' },
+        ],
+        [
+            'editEphemeralMessageMedia',
+            {
+                chat_id: 42,
+                ephemeral_message_id: 'eph-1',
+                media: {
+                    type: 'photo',
+                    media: 'photo-id',
+                    caption: 'media',
+                    caption_entities: boldEntities(5),
+                    parse_mode: undefined,
+                },
+            },
+        ],
+        [
+            'editEphemeralMessageReplyMarkup',
+            {
+                chat_id: 42,
+                ephemeral_message_id: 'eph-1',
+                reply_markup: markup,
+            },
+        ],
+        [
+            'deleteEphemeralMessage',
+            { chat_id: 42, ephemeral_message_id: 'eph-1' },
+        ],
+    ])
+})
+
+test('Context ephemeral helpers target the ephemeral message', async (t) => {
+    const calls = []
+    const record =
+        (method) =>
+        (...args) => {
+            calls.push([method, args])
+            return true
+        }
+    const telegram = {
+        sendMessage: record('sendMessage'),
+        editEphemeralMessageText: record('editEphemeralMessageText'),
+        editEphemeralMessageCaption: record('editEphemeralMessageCaption'),
+        editEphemeralMessageMedia: record('editEphemeralMessageMedia'),
+        editEphemeralMessageReplyMarkup: record(
+            'editEphemeralMessageReplyMarkup'
+        ),
+        deleteEphemeralMessage: record('deleteEphemeralMessage'),
+    }
+    const botInfo = { id: 7, is_bot: true, first_name: 'Bot' }
+    const from = { id: 99, is_bot: false, first_name: 'User' }
+    const chat = { id: 42, type: 'private' }
+    const ctx = new Context(
+        {
+            update_id: 1,
+            callback_query: {
+                id: 'cbq-1',
+                from,
+                chat_instance: 'instance',
+                data: 'more',
+                message: {
+                    message_id: 12,
+                    date: 1,
+                    chat,
+                    text: 'only you can see this',
+                    ephemeral_message_id: 'eph-1',
+                },
+            },
+        },
+        telegram,
+        botInfo
+    )
+    const markup = { inline_keyboard: [] }
+    const ephemeral = { receiver_user_id: 99, callback_query_id: 'cbq-1' }
+
+    t.is(ctx.ephemeralMessageId, 'eph-1')
+
+    await ctx.reply('hi', { ephemeral_message_parameters: ephemeral })
+    await ctx.editEphemeralMessageText('edited', { reply_markup: markup })
+    await ctx.editEphemeralMessageText('other', {
+        ephemeral_message_id: 'eph-2',
+    })
+    await ctx.editEphemeralMessageCaption('caption')
+    await ctx.editEphemeralMessageMedia({ type: 'photo', media: 'photo-id' })
+    await ctx.editEphemeralMessageReplyMarkup(markup)
+    await ctx.editEphemeralMessageReplyMarkup(undefined, {
+        ephemeral_message_id: 'eph-2',
+    })
+    await ctx.deleteEphemeralMessage()
+    await ctx.deleteEphemeralMessage('eph-2')
+
+    t.deepEqual(calls, [
+        [
+            'sendMessage',
+            [
+                42,
+                'hi',
+                {
+                    message_thread_id: undefined,
+                    business_connection_id: undefined,
+                    ephemeral_message_parameters: ephemeral,
+                },
+            ],
+        ],
+        [
+            'editEphemeralMessageText',
+            [42, 'eph-1', 'edited', { reply_markup: markup }],
+        ],
+        ['editEphemeralMessageText', [42, 'eph-2', 'other', {}]],
+        ['editEphemeralMessageCaption', [42, 'eph-1', 'caption', {}]],
+        [
+            'editEphemeralMessageMedia',
+            [42, 'eph-1', { type: 'photo', media: 'photo-id' }, {}],
+        ],
+        ['editEphemeralMessageReplyMarkup', [42, 'eph-1', markup]],
+        ['editEphemeralMessageReplyMarkup', [42, 'eph-2', undefined]],
+        ['deleteEphemeralMessage', [42, 'eph-1']],
+        ['deleteEphemeralMessage', [42, 'eph-2']],
+    ])
+
+    const plain = new Context(
+        {
+            update_id: 2,
+            message: { message_id: 13, date: 1, chat, from, text: 'hello' },
+        },
+        telegram,
+        botInfo
+    )
+    t.is(plain.ephemeralMessageId, undefined)
+    t.throws(() => plain.deleteEphemeralMessage(), { instanceOf: TypeError })
+    t.throws(() => plain.editEphemeralMessageText('nope'), {
+        instanceOf: TypeError,
+    })
+    // an explicit id works outside ephemeral updates
+    await plain.deleteEphemeralMessage('eph-3')
+    t.deepEqual(calls.at(-1), ['deleteEphemeralMessage', [42, 'eph-3']])
+})
+
+test('ephemeral message parameters are typed on send helpers', (t) => {
+    compileTypeScript(
+        'ephemeral-types.ts',
+        [
+            `import { Context, Telegram } from '${process.cwd()}'`,
+            '',
+            'declare const ctx: Context',
+            'declare const telegram: Telegram',
+            'const ephemeral_message_parameters = { receiver_user_id: 7 }',
+            '',
+            'void ctx.reply("hi", { ephemeral_message_parameters })',
+            'void ctx.replyWithPhoto("photo", { ephemeral_message_parameters })',
+            'void ctx.sendDocument("doc", { ephemeral_message_parameters })',
+            'void telegram.sendSticker(1, "s", { ephemeral_message_parameters })',
+            'void telegram.sendVenue(1, 0, 0, "t", "a", { ephemeral_message_parameters })',
+            'const edited: Promise<true> = ctx.editEphemeralMessageText("t")',
+            'const deleted: Promise<true> = telegram.deleteEphemeralMessage(1, "e")',
+            'void edited, deleted',
+            '// @ts-expect-error sendMediaGroup does not support ephemeral messages',
+            'void telegram.sendMediaGroup(1, [], { ephemeral_message_parameters })',
+        ].join('\n')
+    )
+    t.pass()
+})
+
 test('Bot API 9.4-9.6 changelog fields are typed', (t) => {
     const files = {
         manage: readTypeFile('manage'),
@@ -871,7 +1096,8 @@ test('native fetch errors use safe network error boundary', async (t) => {
 
 test('plain object fetch errors are sanitized before exposure', async (t) => {
     const err = {
-        message: 'request to https://api.telegram.org/bot123:secret/getMe failed',
+        message:
+            'request to https://api.telegram.org/bot123:secret/getMe failed',
         stack: 'Error: https://api.telegram.org/bot123:secret/getMe',
         details: {
             url: 'https://api.telegram.org/bot123:secret/getMe',

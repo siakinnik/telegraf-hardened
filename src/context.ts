@@ -219,6 +219,14 @@ export class Context<U extends Deunionize<tg.Update> = tg.Update> {
             ?.inline_message_id
     }
 
+    /** Shorthand for `ephemeral_message_id` of the message in the current update, if that message is ephemeral. */
+    get ephemeralMessageId(): string | undefined {
+        const msg = this.msg
+        return msg?.has('ephemeral_message_id')
+            ? msg.ephemeral_message_id
+            : undefined
+    }
+
     get passportData() {
         if (this.message == null) return undefined
         if (!('passport_data' in this.message)) return undefined
@@ -465,6 +473,99 @@ export class Context<U extends Deunionize<tg.Update> = tg.Update> {
             this.msgId,
             this.inlineMessageId,
             markup
+        )
+    }
+
+    /**
+     * Edits the ephemeral message in the current update, or the one given by `extra.ephemeral_message_id`.
+     * @see https://core.telegram.org/bots/api#editephemeralmessagetext
+     */
+    editEphemeralMessageText(
+        text: string | FmtString,
+        extra?: tt.ExtraEditEphemeralMessageText & EphemeralMessageTarget
+    ) {
+        const { ephemeral_message_id = this.ephemeralMessageId, ...rest } =
+            extra ?? {}
+        this.assert(this.chat, 'editEphemeralMessageText')
+        this.assert(ephemeral_message_id, 'editEphemeralMessageText')
+        return this.telegram.editEphemeralMessageText(
+            this.chat.id,
+            ephemeral_message_id,
+            text,
+            rest
+        )
+    }
+
+    /**
+     * Edits the ephemeral message in the current update, or the one given by `extra.ephemeral_message_id`.
+     * @see https://core.telegram.org/bots/api#editephemeralmessagecaption
+     */
+    editEphemeralMessageCaption(
+        caption: string | FmtString | undefined,
+        extra?: tt.ExtraEditEphemeralMessageCaption & EphemeralMessageTarget
+    ) {
+        const { ephemeral_message_id = this.ephemeralMessageId, ...rest } =
+            extra ?? {}
+        this.assert(this.chat, 'editEphemeralMessageCaption')
+        this.assert(ephemeral_message_id, 'editEphemeralMessageCaption')
+        return this.telegram.editEphemeralMessageCaption(
+            this.chat.id,
+            ephemeral_message_id,
+            caption,
+            rest
+        )
+    }
+
+    /**
+     * Edits the ephemeral message in the current update, or the one given by `extra.ephemeral_message_id`.
+     * @see https://core.telegram.org/bots/api#editephemeralmessagemedia
+     */
+    editEphemeralMessageMedia(
+        media: tt.WrapCaption<tg.InputMedia>,
+        extra?: tt.ExtraEditEphemeralMessageMedia & EphemeralMessageTarget
+    ) {
+        const { ephemeral_message_id = this.ephemeralMessageId, ...rest } =
+            extra ?? {}
+        this.assert(this.chat, 'editEphemeralMessageMedia')
+        this.assert(ephemeral_message_id, 'editEphemeralMessageMedia')
+        return this.telegram.editEphemeralMessageMedia(
+            this.chat.id,
+            ephemeral_message_id,
+            media,
+            rest
+        )
+    }
+
+    /**
+     * Edits the ephemeral message in the current update, or the one given by `extra.ephemeral_message_id`.
+     * @see https://core.telegram.org/bots/api#editephemeralmessagereplymarkup
+     */
+    editEphemeralMessageReplyMarkup(
+        markup: tg.InlineKeyboardMarkup | undefined,
+        extra?: EphemeralMessageTarget
+    ) {
+        const ephemeralMessageId =
+            extra?.ephemeral_message_id ?? this.ephemeralMessageId
+        this.assert(this.chat, 'editEphemeralMessageReplyMarkup')
+        this.assert(ephemeralMessageId, 'editEphemeralMessageReplyMarkup')
+        return this.telegram.editEphemeralMessageReplyMarkup(
+            this.chat.id,
+            ephemeralMessageId,
+            markup
+        )
+    }
+
+    /**
+     * Deletes the ephemeral message in the current update, or the one given by `ephemeralMessageId`.
+     * @see https://core.telegram.org/bots/api#deleteephemeralmessage
+     */
+    deleteEphemeralMessage(ephemeralMessageId?: string) {
+        ephemeralMessageId ??= this.ephemeralMessageId
+        this.assert(this.chat, 'deleteEphemeralMessage')
+        this.assert(ephemeralMessageId, 'deleteEphemeralMessage')
+        return this.telegram.deleteEphemeralMessage(
+            this.chat.id,
+            ephemeralMessageId
         )
     }
 
@@ -1616,6 +1717,11 @@ export class Context<U extends Deunionize<tg.Update> = tg.Update> {
 }
 
 export default Context
+
+/** Overrides which ephemeral message a Context helper targets; defaults to {@link Context.ephemeralMessageId} */
+interface EphemeralMessageTarget {
+    ephemeral_message_id?: string
+}
 
 type UpdateTypes<U extends Deunionize<tg.Update>> = Extract<
     UnionKeys<U>,

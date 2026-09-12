@@ -95,7 +95,7 @@
     },
     "types": "./typings/index.d.ts",
     "dependencies": {
-        "@telegraf/types": "npm:@telegraf-hardened/types@^9.6.0",
+        "@telegraf/types": "npm:@telegraf-hardened/types@^10.3.0",
         "debug": "^4.4.3",
         "mri": "^1.2.0",
         "p-timeout": "^4.1.0",

@@ -79,6 +79,18 @@ export type ExtraEditChatInviteLink = MakeExtra<
     'editChatInviteLink',
     'invite_link'
 >
+export type ExtraEditEphemeralMessageCaption = MakeExtra<
+    'editEphemeralMessageCaption',
+    'ephemeral_message_id' | 'caption'
+>
+export type ExtraEditEphemeralMessageMedia = MakeExtra<
+    'editEphemeralMessageMedia',
+    'ephemeral_message_id' | 'media'
+>
+export type ExtraEditEphemeralMessageText = MakeExtra<
+    'editEphemeralMessageText',
+    'ephemeral_message_id' | 'text' | 'rich_message'
+>
 export type ExtraEditMessageCaption = MakeExtra<
     'editMessageCaption',
     'message_id' | 'inline_message_id' | 'caption'

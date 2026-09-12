@@ -1075,6 +1075,101 @@ export class Telegram extends ApiClient {
         })
     }
 
+    /**
+     * Edit the text of an ephemeral message. Returns True on success.
+     * @param chatId Unique identifier for the target chat or username of the target channel (in the format @channelusername)
+     * @param ephemeralMessageId Unique identifier of the ephemeral message to edit
+     * @param text New text of the message
+     */
+    editEphemeralMessageText(
+        chatId: number | string,
+        ephemeralMessageId: string,
+        text: string | FmtString,
+        extra?: tt.ExtraEditEphemeralMessageText
+    ) {
+        const t = FmtString.normalise(text)
+        return this.callApi('editEphemeralMessageText', {
+            chat_id: chatId,
+            ephemeral_message_id: ephemeralMessageId,
+            ...extra,
+            ...t,
+        })
+    }
+
+    /**
+     * Edit the caption of an ephemeral message. Returns True on success.
+     * @param chatId Unique identifier for the target chat or username of the target channel (in the format @channelusername)
+     * @param ephemeralMessageId Unique identifier of the ephemeral message to edit
+     * @param caption New caption of the message
+     */
+    editEphemeralMessageCaption(
+        chatId: number | string,
+        ephemeralMessageId: string,
+        caption: string | FmtString | undefined,
+        extra?: tt.ExtraEditEphemeralMessageCaption
+    ) {
+        return this.callApi('editEphemeralMessageCaption', {
+            chat_id: chatId,
+            ephemeral_message_id: ephemeralMessageId,
+            ...extra,
+            ...fmtCaption({ caption }),
+        })
+    }
+
+    /**
+     * Edit the media content of an ephemeral message. Returns True on success.
+     * @param chatId Unique identifier for the target chat or username of the target channel (in the format @channelusername)
+     * @param ephemeralMessageId Unique identifier of the ephemeral message to edit
+     * @param media New media of message
+     * @param extra Additional parameters, such as reply_markup
+     */
+    editEphemeralMessageMedia(
+        chatId: number | string,
+        ephemeralMessageId: string,
+        media: tt.WrapCaption<tg.InputMedia>,
+        extra?: tt.ExtraEditEphemeralMessageMedia
+    ) {
+        return this.callApi('editEphemeralMessageMedia', {
+            chat_id: chatId,
+            ephemeral_message_id: ephemeralMessageId,
+            media: fmtCaption(media),
+            ...extra,
+        })
+    }
+
+    /**
+     * Edit only the reply markup of an ephemeral message. Returns True on success.
+     * @param chatId Unique identifier for the target chat or username of the target channel (in the format @channelusername)
+     * @param ephemeralMessageId Unique identifier of the ephemeral message to edit
+     * @param markup A JSON-serialized object for an inline keyboard.
+     */
+    editEphemeralMessageReplyMarkup(
+        chatId: number | string,
+        ephemeralMessageId: string,
+        markup: tg.InlineKeyboardMarkup | undefined
+    ) {
+        return this.callApi('editEphemeralMessageReplyMarkup', {
+            chat_id: chatId,
+            ephemeral_message_id: ephemeralMessageId,
+            reply_markup: markup,
+        })
+    }
+
+    /**
+     * Delete an ephemeral message. Returns True on success.
+     * @param chatId Unique identifier for the target chat or username of the target channel (in the format @channelusername)
+     * @param ephemeralMessageId Unique identifier of the ephemeral message to delete
+     */
+    deleteEphemeralMessage(
+        chatId: number | string,
+        ephemeralMessageId: string
+    ) {
+        return this.callApi('deleteEphemeralMessage', {
+            chat_id: chatId,
+            ephemeral_message_id: ephemeralMessageId,
+        })
+    }
+
     setChatStickerSet(chatId: number | string, setName: string) {
         return this.callApi('setChatStickerSet', {
             chat_id: chatId,
@@ -1913,6 +2008,50 @@ export class Telegram extends ApiClient {
 
     editUserStarSubscription(args: tg.Opts<'editUserStarSubscription'>) {
         return this.callApi('editUserStarSubscription', args)
+    }
+
+    sendRichMessage(args: tg.Opts<'sendRichMessage'>) {
+        return this.callApi('sendRichMessage', args)
+    }
+
+    sendRichMessageDraft(args: tg.Opts<'sendRichMessageDraft'>) {
+        return this.callApi('sendRichMessageDraft', args)
+    }
+
+    sendLivePhoto(args: tg.Opts<'sendLivePhoto'>) {
+        return this.callApi('sendLivePhoto', args)
+    }
+
+    deleteMessageReaction(args: tg.Opts<'deleteMessageReaction'>) {
+        return this.callApi('deleteMessageReaction', args)
+    }
+
+    deleteAllMessageReactions(args: tg.Opts<'deleteAllMessageReactions'>) {
+        return this.callApi('deleteAllMessageReactions', args)
+    }
+
+    answerChatJoinRequestQuery(args: tg.Opts<'answerChatJoinRequestQuery'>) {
+        return this.callApi('answerChatJoinRequestQuery', args)
+    }
+
+    sendChatJoinRequestWebApp(args: tg.Opts<'sendChatJoinRequestWebApp'>) {
+        return this.callApi('sendChatJoinRequestWebApp', args)
+    }
+
+    answerGuestQuery(args: tg.Opts<'answerGuestQuery'>) {
+        return this.callApi('answerGuestQuery', args)
+    }
+
+    getManagedBotAccessSettings(args: tg.Opts<'getManagedBotAccessSettings'>) {
+        return this.callApi('getManagedBotAccessSettings', args)
+    }
+
+    setManagedBotAccessSettings(args: tg.Opts<'setManagedBotAccessSettings'>) {
+        return this.callApi('setManagedBotAccessSettings', args)
+    }
+
+    getUserPersonalChatMessages(args: tg.Opts<'getUserPersonalChatMessages'>) {
+        return this.callApi('getUserPersonalChatMessages', args)
     }
 
     /**
