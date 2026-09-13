@@ -144,10 +144,21 @@ const replyContext: ReplyContext = {
     },
     replyWithRichMessage(this: Context, richMessage, extra) {
         this.assert(this.chat, 'replyWithRichMessage')
+        const message_thread_id =
+            this.msg &&
+            'message_thread_id' in this.msg &&
+            this.msg.is_topic_message
+                ? this.msg.message_thread_id
+                : undefined
+        const business_connection_id =
+            this.businessConnection?.id ??
+            this.businessMessage?.business_connection_id ??
+            this.editedBusinessMessage?.business_connection_id ??
+            this.deletedBusinessMessages?.business_connection_id
         return this.telegram.sendRichMessage({
             chat_id: this.chat.id,
-            message_thread_id: this.message_thread_id,
-            business_connection_id: this.business_connection_id,
+            message_thread_id,
+            business_connection_id,
             ...makeReply(this, extra),
             rich_message: richMessage,
         })
