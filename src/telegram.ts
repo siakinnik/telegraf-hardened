@@ -2054,14 +2054,27 @@ export class Telegram extends ApiClient {
         return this.callApi('sendChatJoinRequestWebApp', args)
     }
 
+    /**
+     * Send a message in response to a guest query made on behalf of a user by another, opted-in bot.
+     * The query id is the `guest_query_id` of the message in a `guest_message` update.
+     * @see https://core.telegram.org/bots/api#answerguestquery
+     */
     answerGuestQuery(args: tg.Opts<'answerGuestQuery'>) {
         return this.callApi('answerGuestQuery', args)
     }
 
+    /**
+     * Get the access settings granted by a managed bot to the bot that manages it.
+     * @see https://core.telegram.org/bots/api#getmanagedbotaccesssettings
+     */
     getManagedBotAccessSettings(args: tg.Opts<'getManagedBotAccessSettings'>) {
         return this.callApi('getManagedBotAccessSettings', args)
     }
 
+    /**
+     * Change the access settings granted by a managed bot to the bot that manages it.
+     * @see https://core.telegram.org/bots/api#setmanagedbotaccesssettings
+     */
     setManagedBotAccessSettings(args: tg.Opts<'setManagedBotAccessSettings'>) {
         return this.callApi('setManagedBotAccessSettings', args)
     }

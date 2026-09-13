@@ -173,6 +173,27 @@ export class Context<U extends Deunionize<tg.Update> = tg.Update> {
         return this.update.removed_chat_boost as PropOr<U, 'removed_chat_boost'>
     }
 
+    get managedBot() {
+        return this.update.managed_bot as PropOr<U, 'managed_bot'>
+    }
+
+    /** Message sent to the bot on behalf of a user by another, opted-in bot; answer it with {@link Context.answerGuestQuery} */
+    get guestMessage() {
+        return this.update.guest_message as PropOr<U, 'guest_message'>
+    }
+
+    /** Change of a user's payment subscription to the bot (the `subscription` update) */
+    get subscription() {
+        return this.update.subscription as PropOr<U, 'subscription'>
+    }
+
+    get stoppedMessageGeneration() {
+        return this.update.stopped_message_generation as PropOr<
+            U,
+            'stopped_message_generation'
+        >
+    }
+
     /** Shorthand for any `message` object present in the current update. One of
      * `message`, `edited_message`, `channel_post`, `edited_channel_post` or
      * `callback_query.message`
@@ -198,7 +219,8 @@ export class Context<U extends Deunionize<tg.Update> = tg.Update> {
             this.chatJoinRequest ??
             this.chatMember ??
             this.myChatMember ??
-            this.removedChatBoost
+            this.removedChatBoost ??
+            this.stoppedMessageGeneration
         )?.chat as Getter<U, 'chat'>
     }
 
@@ -344,6 +366,27 @@ export class Context<U extends Deunionize<tg.Update> = tg.Update> {
     answerGameQuery(...args: Shorthand<'answerGameQuery'>) {
         this.assert(this.callbackQuery, 'answerGameQuery')
         return this.telegram.answerGameQuery(this.callbackQuery.id, ...args)
+    }
+
+    /**
+     * Answers the guest query of the guest message in the current update.
+     * @see https://core.telegram.org/bots/api#answerguestquery
+     */
+    answerGuestQuery(
+        text: string | FmtString,
+        extra?: tt.ExtraAnswerGuestQuery
+    ) {
+        const guestMessage = this.guestMessage
+        const guestQueryId =
+            guestMessage && 'guest_query_id' in guestMessage
+                ? guestMessage.guest_query_id
+                : undefined
+        this.assert(guestQueryId, 'answerGuestQuery')
+        return this.telegram.answerGuestQuery({
+            ...extra,
+            ...FmtString.normalise(text),
+            guest_query_id: guestQueryId,
+        })
     }
 
     /**
@@ -1851,23 +1894,30 @@ function getMessageFromAnySource<U extends tg.Update>(ctx: Context<U>) {
     if (msg) return Object.assign(Object.create(Msg), msg)
 }
 
+/** Updates whose payload carries the acting user as `from` */
+type UpdateWithFrom =
+    | tg.Update.CallbackQueryUpdate
+    | tg.Update.InlineQueryUpdate
+    | tg.Update.ShippingQueryUpdate
+    | tg.Update.PreCheckoutQueryUpdate
+    | tg.Update.ChosenInlineResultUpdate
+    | tg.Update.ChatMemberUpdate
+    | tg.Update.MyChatMemberUpdate
+    | tg.Update.ChatJoinRequestUpdate
+
+/** Updates whose payload carries the acting user as `user` */
+type UpdateWithUser =
+    | tg.Update.MessageReactionUpdate
+    | tg.Update.PollAnswerUpdate
+    | tg.Update.ChatBoostUpdate
+    | tg.Update.BotSubscriptionUpdate
+    | tg.Update.ManagedBotUpdate
+
 type GetUserFromAnySource<U extends tg.Update> =
     // check if it's a message type with `from`
     GetMsg<U> extends { from: tg.User }
         ? tg.User
-        : U extends  // these updates have `from`
-              | tg.Update.CallbackQueryUpdate
-              | tg.Update.InlineQueryUpdate
-              | tg.Update.ShippingQueryUpdate
-              | tg.Update.PreCheckoutQueryUpdate
-              | tg.Update.ChosenInlineResultUpdate
-              | tg.Update.ChatMemberUpdate
-              | tg.Update.MyChatMemberUpdate
-              | tg.Update.ChatJoinRequestUpdate
-              // these updates have `user`
-              | tg.Update.MessageReactionUpdate
-              | tg.Update.PollAnswerUpdate
-              | tg.Update.ChatBoostUpdate
+        : U extends UpdateWithFrom | UpdateWithUser
         ? tg.User
         : undefined
 
@@ -1887,8 +1937,13 @@ function getUserFromAnySource<U extends tg.Update>(ctx: Context<U>) {
             ctx.myChatMember ??
             ctx.chatJoinRequest
         )?.from ??
-        (ctx.messageReaction ?? ctx.pollAnswer ?? ctx.chatBoost?.boost.source)
-            ?.user
+        (
+            ctx.messageReaction ??
+            ctx.pollAnswer ??
+            ctx.subscription ??
+            ctx.managedBot ??
+            ctx.chatBoost?.boost.source
+        )?.user
     )
 }
 

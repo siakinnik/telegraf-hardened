@@ -46,6 +46,10 @@ export type ExtraAnswerCbQuery = MakeExtra<
     'answerCallbackQuery',
     'text' | 'callback_query_id'
 >
+export type ExtraAnswerGuestQuery = MakeExtra<
+    'answerGuestQuery',
+    'guest_query_id' | 'text'
+>
 export type ExtraAnswerInlineQuery = MakeExtra<
     'answerInlineQuery',
     'inline_query_id' | 'results'
