@@ -172,36 +172,38 @@ const DEFAULT_OPTIONS: ApiClient.Options = {
     requestTimeout: REQUEST_TIMEOUT,
 }
 
-function isInputFile(value: unknown): value is InputFile {
+/** Keys whose values are Bot API objects consisting of just `{ url }` (WebAppInfo, LoginUrl), never files */
+const URL_OBJECT_KEYS = new Set(['web_app', 'login_url'])
+
+/**
+ * @param key the property the value is stored under, if any
+ */
+function isInputFile(value: unknown, key?: string): value is InputFile {
+    if (!value || typeof value !== 'object') return false
+    if (hasProp(value, 'source') && !!value.source) return true
+    // a URL file is exactly `{ url, filename? }`; objects with other keys (URL buttons,
+    // text_link entities, link media) are Bot API objects that must be sent as JSON
     return (
-        !!value &&
-        typeof value === 'object' &&
-        ((hasProp(value, 'source') && !!value.source) ||
-            (hasProp(value, 'url') && !!value.url && !isLinkEntity(value)))
+        hasProp(value, 'url') &&
+        !!value.url &&
+        Object.keys(value).every((k) => k === 'url' || k === 'filename') &&
+        !(key !== undefined && URL_OBJECT_KEYS.has(key))
     )
 }
 
-function isLinkEntity(value: unknown): boolean {
-    return (
-        !!value &&
-        typeof value === 'object' &&
-        hasProp(value, 'type') &&
-        value.type === 'text_link'
-    )
-}
-
-function includesMediaValue(value: unknown): boolean {
+function includesMediaValue(value: unknown, key?: string): boolean {
     if (!value || typeof value !== 'object') return false
     if (Buffer.isBuffer(value) || isStream(value)) return false
-    if (isInputFile(value)) return true
-    if (Array.isArray(value)) return value.some(includesMediaValue)
-    return Object.values(value).some(includesMediaValue)
+    if (isInputFile(value, key)) return true
+    if (Array.isArray(value))
+        return value.some((item) => includesMediaValue(item))
+    return Object.entries(value).some(([k, v]) => includesMediaValue(v, k))
 }
 
 function includesMedia(payload: Record<string, unknown>) {
     return Object.entries(payload).some(([key, value]) => {
         if (key === 'link_preview_options') return false
-        return includesMediaValue(value)
+        return includesMediaValue(value, key)
     })
 }
 
@@ -273,11 +275,11 @@ async function attachFormValue(
         })
         return
     }
-    if (isInputFile(value)) {
+    if (isInputFile(value, id)) {
         return await attachFormMedia(form, value, id, options)
     }
     if (Array.isArray(value) || typeof value === 'object') {
-        const packedValue = await attachNestedFiles(form, value, options)
+        const packedValue = await attachNestedFiles(form, value, options, id)
         return form.addPart({
             headers: { 'content-disposition': `form-data; name="${id}"` },
             body: JSON.stringify(packedValue),
@@ -292,11 +294,12 @@ async function attachFormValue(
 async function attachNestedFiles(
     form: MultipartStream,
     value: unknown,
-    options: ApiClient.Options
+    options: ApiClient.Options,
+    key?: string
 ): Promise<unknown> {
     if (!value || typeof value !== 'object') return value
     if (Buffer.isBuffer(value) || isStream(value)) return value
-    if (isInputFile(value)) {
+    if (isInputFile(value, key)) {
         const attachmentId = crypto.randomBytes(16).toString('hex')
         await attachFormMedia(form, value, attachmentId, options)
         return `attach://${attachmentId}`
@@ -309,7 +312,7 @@ async function attachNestedFiles(
 
     const result: Record<string, unknown> = {}
     for (const [key, nestedValue] of Object.entries(value)) {
-        result[key] = await attachNestedFiles(form, nestedValue, options)
+        result[key] = await attachNestedFiles(form, nestedValue, options, key)
     }
     return result
 }

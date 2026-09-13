@@ -375,16 +375,18 @@ export class Context<U extends Deunionize<tg.Update> = tg.Update> {
     }
 
     /**
+     * Pass `undefined` as text and `extra.rich_message` to turn the message into a rich message.
      * @see https://core.telegram.org/bots/api#editmessagetext
      */
-    editMessageText(text: string | FmtString, extra?: tt.ExtraEditMessageText) {
+    editMessageText(
+        ...content: tt.TextOrRichMessageEdit<tt.ExtraEditMessageText>
+    ) {
         this.assert(this.msgId ?? this.inlineMessageId, 'editMessageText')
         return this.telegram.editMessageText(
             this.chat?.id,
             this.msgId,
             this.inlineMessageId,
-            text,
-            extra
+            ...content
         )
     }
 
@@ -478,11 +480,13 @@ export class Context<U extends Deunionize<tg.Update> = tg.Update> {
 
     /**
      * Edits the ephemeral message in the current update, or the one given by `extra.ephemeral_message_id`.
+     * Pass `undefined` as text and `extra.rich_message` to turn it into a rich message.
      * @see https://core.telegram.org/bots/api#editephemeralmessagetext
      */
     editEphemeralMessageText(
-        text: string | FmtString,
-        extra?: tt.ExtraEditEphemeralMessageText & EphemeralMessageTarget
+        ...[text, extra]: tt.TextOrRichMessageEdit<
+            tt.ExtraEditEphemeralMessageText & EphemeralMessageTarget
+        >
     ) {
         const { ephemeral_message_id = this.ephemeralMessageId, ...rest } =
             extra ?? {}
@@ -491,8 +495,11 @@ export class Context<U extends Deunionize<tg.Update> = tg.Update> {
         return this.telegram.editEphemeralMessageText(
             this.chat.id,
             ephemeral_message_id,
-            text,
-            rest
+            // the text/rich_message pairing was already enforced by this method's own signature
+            ...([
+                text,
+                rest,
+            ] as tt.TextOrRichMessageEdit<tt.ExtraEditEphemeralMessageText>)
         )
     }
 

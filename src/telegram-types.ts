@@ -10,6 +10,7 @@ import {
     InputMediaDocument,
     InputMediaPhoto,
     InputMediaVideo,
+    InputRichMessage,
 } from './core/types/typegram'
 
 import { UnionKeys } from './core/helpers/deunionize'
@@ -89,7 +90,7 @@ export type ExtraEditEphemeralMessageMedia = MakeExtra<
 >
 export type ExtraEditEphemeralMessageText = MakeExtra<
     'editEphemeralMessageText',
-    'ephemeral_message_id' | 'text' | 'rich_message'
+    'ephemeral_message_id' | 'text'
 >
 export type ExtraEditMessageCaption = MakeExtra<
     'editMessageCaption',
@@ -107,7 +108,25 @@ export type ExtraEditMessageText = MakeExtra<
     'editMessageText',
     'message_id' | 'inline_message_id' | 'text'
 >
+/**
+ * Content arguments of a text edit: new `text` with optional extras, or `undefined` text with `extra.rich_message`.
+ * The Bot API accepts exactly one of the two.
+ */
+export type TextOrRichMessageEdit<Extra extends { rich_message?: unknown }> =
+    | TextEdit<Extra>
+    | RichMessageEdit<Extra>
+type TextEdit<Extra> = [
+    text: string | FmtString,
+    extra?: Expand<Omit<Extra, 'rich_message'> & { rich_message?: undefined }>,
+]
+type RichMessageEdit<Extra> = [
+    text: undefined,
+    extra: Expand<
+        Omit<Extra, 'rich_message'> & { rich_message: InputRichMessage }
+    >,
+]
 export type ExtraGame = MakeExtra<'sendGame', 'game_short_name'>
+export type ExtraGetChatAdministrators = MakeExtra<'getChatAdministrators'>
 export type NewInvoiceParameters = MakeExtra<
     'sendInvoice',
     | 'disable_notification'

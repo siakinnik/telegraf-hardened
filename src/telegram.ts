@@ -549,8 +549,14 @@ export class Telegram extends ApiClient {
     /**
      * @param chatId Unique identifier for the target chat or username of the target supergroup or channel (in the format @channelusername)
      */
-    getChatAdministrators(chatId: number | string) {
-        return this.callApi('getChatAdministrators', { chat_id: chatId })
+    getChatAdministrators(
+        chatId: number | string,
+        extra?: tt.ExtraGetChatAdministrators
+    ) {
+        return this.callApi('getChatAdministrators', {
+            chat_id: chatId,
+            ...extra,
+        })
     }
 
     /**
@@ -897,38 +903,33 @@ export class Telegram extends ApiClient {
      * @param chatId Required if inlineMessageId is not specified. Unique identifier for the target chat or username of the target channel (in the format @channelusername)
      * @param messageId Required if inlineMessageId is not specified. Identifier of the sent message
      * @param inlineMessageId Required if chatId and messageId are not specified. Identifier of the inline message
-     * @param text New text of the message
+     * @param text New text of the message, or `undefined` when replacing the content with `extra.rich_message`
      */
     editMessageText(
         chatId: number | string | undefined,
         messageId: number | undefined,
         inlineMessageId: string | undefined,
-        text: string | FmtString,
-        extra?: tt.ExtraEditMessageText
+        ...[text, extra]: tt.TextOrRichMessageEdit<tt.ExtraEditMessageText>
     ) {
-        const t = FmtString.normalise(text)
-        const base = { ...extra, ...t }
+        const base = {
+            entities: extra?.entities,
+            parse_mode: extra?.parse_mode,
+            reply_markup: extra?.reply_markup,
+            link_preview_options: extra?.link_preview_options,
+            business_connection_id: extra?.business_connection_id,
+            ...textOrRichMessage('editMessageText', text, extra?.rich_message),
+        }
 
         if (inlineMessageId !== undefined) {
             return this.callApi('editMessageText', {
-                text: base.text,
-                entities: base.entities,
-                parse_mode: base.parse_mode,
-                reply_markup: base.reply_markup,
-                link_preview_options: base.link_preview_options,
-                business_connection_id: base.business_connection_id,
+                ...base,
                 inline_message_id: inlineMessageId,
             } as unknown as tg.Opts<'editMessageText'>)
         }
 
         if (chatId !== undefined && messageId !== undefined) {
             return this.callApi('editMessageText', {
-                text: base.text,
-                entities: base.entities,
-                parse_mode: base.parse_mode,
-                reply_markup: base.reply_markup,
-                link_preview_options: base.link_preview_options,
-                business_connection_id: base.business_connection_id,
+                ...base,
                 chat_id: chatId,
                 message_id: messageId,
             } as unknown as tg.Opts<'editMessageText'>)
@@ -1079,21 +1080,26 @@ export class Telegram extends ApiClient {
      * Edit the text of an ephemeral message. Returns True on success.
      * @param chatId Unique identifier for the target chat or username of the target channel (in the format @channelusername)
      * @param ephemeralMessageId Unique identifier of the ephemeral message to edit
-     * @param text New text of the message
+     * @param text New text of the message, or `undefined` when replacing the content with `extra.rich_message`
      */
     editEphemeralMessageText(
         chatId: number | string,
         ephemeralMessageId: string,
-        text: string | FmtString,
-        extra?: tt.ExtraEditEphemeralMessageText
+        ...[
+            text,
+            extra,
+        ]: tt.TextOrRichMessageEdit<tt.ExtraEditEphemeralMessageText>
     ) {
-        const t = FmtString.normalise(text)
         return this.callApi('editEphemeralMessageText', {
             chat_id: chatId,
             ephemeral_message_id: ephemeralMessageId,
             ...extra,
-            ...t,
-        })
+            ...textOrRichMessage(
+                'editEphemeralMessageText',
+                text,
+                extra?.rich_message
+            ),
+        } as tg.Opts<'editEphemeralMessageText'>)
     }
 
     /**
@@ -2080,3 +2086,25 @@ export class Telegram extends ApiClient {
 }
 
 export default Telegram
+
+/** Content fields of a text edit: `text` (with its entities) or `rich_message`, never both */
+function textOrRichMessage(
+    method: string,
+    text: string | FmtString | undefined,
+    richMessage: tg.InputRichMessage | undefined
+) {
+    if (richMessage !== undefined) {
+        if (text !== undefined) {
+            throw new Error(
+                `Telegram: ${method} accepts either text or extra.rich_message, not both`
+            )
+        }
+        return { rich_message: richMessage }
+    }
+    if (text === undefined) {
+        throw new Error(
+            `Telegram: ${method} requires either text or extra.rich_message`
+        )
+    }
+    return FmtString.normalise(text)
+}

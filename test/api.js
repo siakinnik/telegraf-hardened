@@ -949,6 +949,8 @@ const contextEphemeralSendCalls = {
     sendLocation: (ctx, extra) => ctx.replyWithLocation(1, 2, extra),
     sendMessage: (ctx, extra) => ctx.reply('text', extra),
     sendPhoto: (ctx, extra) => ctx.replyWithPhoto('photo-id', extra),
+    sendRichMessage: (ctx, extra) =>
+        ctx.replyWithRichMessage({ markdown: '*rich*' }, extra),
     sendSticker: (ctx, extra) => ctx.replyWithSticker('sticker-id', extra),
     sendVenue: (ctx, extra) =>
         ctx.replyWithVenue(1, 2, 'Title', 'Address', extra),
@@ -956,10 +958,7 @@ const contextEphemeralSendCalls = {
     sendVideoNote: (ctx, extra) => ctx.replyWithVideoNote('note-id', extra),
     sendVoice: (ctx, extra) => ctx.replyWithVoice('voice-id', extra),
 }
-const EPHEMERAL_SEND_METHODS_WITHOUT_CONTEXT_HELPER = [
-    'sendLivePhoto',
-    'sendRichMessage',
-]
+const EPHEMERAL_SEND_METHODS_WITHOUT_CONTEXT_HELPER = ['sendLivePhoto']
 
 test('Bot API 10.3 ephemeral message fields are typed', (t) => {
     const files = {
@@ -1319,6 +1318,1259 @@ test('ephemeral message APIs are typed for Telegram and Context', (t) => {
             'void ctx.deleteMessage()',
             '',
             'void [missingReceiver, t1, t2, t3, t4, t5, c1, c2, c3, c4, c5, currentId]',
+        ].join('\n')
+    )
+    t.pass()
+})
+
+// Bot API 10.3: rich messages and drafts
+
+const { useNewReplies } = require('../future')
+
+const richMarkdown = { markdown: '*rich*' }
+const richButtons = [
+    { text: 'Docs', url: 'https://example.test/docs' },
+    { text: 'More', callback_data: 'more', style: 'primary' },
+    { text: 'App', web_app: { url: 'https://example.test/app' } },
+]
+const richBlocks = {
+    blocks: [
+        { type: 'heading', text: 'Report', size: 1 },
+        { type: 'paragraph', text: ['Totals ', { type: 'bold', text: '42' }] },
+        { type: 'divider' },
+        { type: 'buttons', buttons: richButtons, align: 'center' },
+    ],
+    is_rtl: false,
+}
+
+const topicMessageUpdate = {
+    update_id: 20,
+    message: {
+        message_id: 5,
+        date: 1,
+        chat: privateChat,
+        from: ephemeralUser,
+        text: 'question',
+        is_topic_message: true,
+        message_thread_id: 9,
+    },
+}
+const businessMessageUpdate = {
+    update_id: 21,
+    business_message: {
+        business_connection_id: 'biz-1',
+        message_id: 6,
+        date: 1,
+        chat: privateChat,
+        from: ephemeralUser,
+        text: 'question',
+    },
+}
+const groupChat = { id: -100, type: 'supergroup', title: 'Group' }
+const chatJoinRequestUpdate = {
+    update_id: 22,
+    chat_join_request: {
+        chat: groupChat,
+        from: ephemeralUser,
+        user_chat_id: 99,
+        date: 1,
+    },
+}
+const inlineQueryUpdate = {
+    update_id: 23,
+    inline_query: { id: 'iq', from: ephemeralUser, query: '', offset: '' },
+}
+const inlineCallbackUpdate = {
+    update_id: 24,
+    callback_query: {
+        id: 'cbq-inline',
+        from: ephemeralUser,
+        chat_instance: 'instance',
+        inline_message_id: 'inline-1',
+        data: 'more',
+    },
+}
+
+/** Return type text of an `ApiMethods` member whose args are a plain object literal */
+function getMethodReturnType(source, name) {
+    const pattern = new RegExp(`\\b${name}\\(args\\??: \\{`)
+    const match = pattern.exec(source)
+    if (!match) return ''
+    const args = getBlock(source, pattern)
+    const rest = source.slice(source.indexOf(args, match.index) + args.length)
+    const returned = /^\)\s*:\s*([^;]*);/.exec(rest)
+    return returned ? compact(returned[1]).trim() : ''
+}
+
+/** Text of a (possibly multi-line) exported type alias */
+function getTypeAlias(source, name) {
+    const start = source.search(new RegExp(`\\btype ${name} =`))
+    if (start === -1) return ''
+    const end = source.indexOf('\nexport ', start)
+    return compact(source.slice(start, end === -1 ? undefined : end))
+}
+
+/** Compacted argument type text of every overload of an `ApiMethods` member */
+function getMethodArgTypes(name) {
+    const source = ts.createSourceFile(
+        'methods.d.ts',
+        readTypeFile('methods'),
+        ts.ScriptTarget.Latest,
+        true
+    )
+    const overloads = []
+    const visit = (node) => {
+        if (
+            ts.isTypeAliasDeclaration(node) &&
+            node.name.text === 'ApiMethods' &&
+            ts.isTypeLiteralNode(node.type)
+        ) {
+            for (const member of node.type.members) {
+                const args = member.parameters?.[0]?.type
+                if (member.name?.text === name && args) {
+                    overloads.push(compact(args.getText(source)))
+                }
+            }
+        }
+        ts.forEachChild(node, visit)
+    }
+    visit(source)
+    return overloads
+}
+
+async function withNewReplies(ctx, fn) {
+    await useNewReplies()(ctx, async () => fn(ctx))
+}
+
+/** Telegram client with a fake fetch recording each request as `[url, kind]` */
+function fetchRecordingTelegram() {
+    const requests = []
+    const telegram = new Telegram('123:abc', {
+        fetch: async (url, init) => {
+            const contentType = init?.headers?.['content-type']
+            requests.push([
+                String(url).replace('https://api.telegram.org/bot123:abc/', ''),
+                contentType ? contentType.split(';')[0] : 'download',
+                contentType === 'application/json'
+                    ? JSON.parse(init.body)
+                    : undefined,
+            ])
+            return {
+                status: 200,
+                statusText: 'OK',
+                body: new ReadableStream({
+                    start(controller) {
+                        controller.enqueue(Buffer.from('file-bytes'))
+                        controller.close()
+                    },
+                }),
+                json: async () => ({ ok: true, result: true }),
+            }
+        },
+    })
+    return { telegram, requests }
+}
+
+test('Telegram.sendRichMessage passes rich message arguments through unchanged', async (t) => {
+    const sentMessage = { message_id: 1, rich_message: { blocks: [] } }
+    const { telegram, calls } = recordingTelegram(sentMessage)
+    const withBlocks = {
+        chat_id: 42,
+        rich_message: richBlocks,
+        reply_markup: inlineMarkup,
+        protect_content: true,
+    }
+    const withHtmlAndMedia = {
+        chat_id: '@channel',
+        message_thread_id: 3,
+        rich_message: {
+            html: '<p><img src="tg://photo?id=p1"></p>',
+            media: [{ id: 'p1', media: { type: 'photo', media: 'photo-id' } }],
+        },
+    }
+    const withMarkdown = {
+        chat_id: 42,
+        business_connection_id: 'biz-1',
+        rich_message: richMarkdown,
+        ephemeral_message_parameters: ephemeralParams,
+        reply_parameters: { message_id: 7 },
+    }
+
+    t.is(await telegram.sendRichMessage(withBlocks), sentMessage)
+    await telegram.sendRichMessage(withHtmlAndMedia)
+    await telegram.sendRichMessage(withMarkdown)
+
+    t.deepEqual(calls, [
+        ['sendRichMessage', withBlocks],
+        ['sendRichMessage', withHtmlAndMedia],
+        ['sendRichMessage', withMarkdown],
+    ])
+    // args are forwarded as-is, not rebuilt
+    t.is(calls[0][1], withBlocks)
+})
+
+test('Telegram.sendRichMessageDraft passes draft arguments through unchanged', async (t) => {
+    const { telegram, calls } = recordingTelegram()
+    const first = {
+        chat_id: 42,
+        draft_id: 1,
+        rich_message: { markdown: 'Thinking' },
+        can_stop: true,
+    }
+    const update = {
+        chat_id: 42,
+        message_thread_id: 9,
+        draft_id: 1,
+        rich_message: richBlocks,
+        can_stop: true,
+        keep_on_stop: true,
+    }
+
+    t.true(await telegram.sendRichMessageDraft(first))
+    await telegram.sendRichMessageDraft(update)
+
+    t.deepEqual(calls, [
+        ['sendRichMessageDraft', first],
+        ['sendRichMessageDraft', update],
+    ])
+    t.is(calls[1][1], update)
+})
+
+test('Telegram.editMessageText edits into rich messages', async (t) => {
+    const { telegram, calls } = recordingTelegram({ message_id: 12 })
+    const linkPreview = { is_disabled: true }
+
+    t.deepEqual(
+        await telegram.editMessageText(42, 12, undefined, undefined, {
+            rich_message: richBlocks,
+            reply_markup: inlineMarkup,
+            business_connection_id: 'biz-1',
+        }),
+        { message_id: 12 }
+    )
+    await telegram.editMessageText(
+        undefined,
+        undefined,
+        'inline-1',
+        undefined,
+        {
+            rich_message: richMarkdown,
+            link_preview_options: linkPreview,
+        }
+    )
+
+    t.deepEqual(calls, [
+        [
+            'editMessageText',
+            {
+                entities: undefined,
+                parse_mode: undefined,
+                reply_markup: inlineMarkup,
+                link_preview_options: undefined,
+                business_connection_id: 'biz-1',
+                rich_message: richBlocks,
+                chat_id: 42,
+                message_id: 12,
+            },
+        ],
+        [
+            'editMessageText',
+            {
+                entities: undefined,
+                parse_mode: undefined,
+                reply_markup: undefined,
+                link_preview_options: linkPreview,
+                business_connection_id: undefined,
+                rich_message: richMarkdown,
+                inline_message_id: 'inline-1',
+            },
+        ],
+    ])
+    t.is(calls[0][1].rich_message, richBlocks)
+    for (const [, payload] of calls) t.false('text' in payload)
+})
+
+test('Telegram.editEphemeralMessageText edits into rich messages', async (t) => {
+    const { telegram, calls } = recordingTelegram()
+
+    t.true(
+        await telegram.editEphemeralMessageText(42, 'eph-1', undefined, {
+            rich_message: richBlocks,
+            reply_markup: inlineMarkup,
+        })
+    )
+
+    t.deepEqual(calls, [
+        [
+            'editEphemeralMessageText',
+            {
+                chat_id: 42,
+                ephemeral_message_id: 'eph-1',
+                reply_markup: inlineMarkup,
+                rich_message: richBlocks,
+            },
+        ],
+    ])
+    t.false('text' in calls[0][1])
+})
+
+test('text edits require exactly one of text or rich_message', (t) => {
+    const { bold } = require('../format')
+    const { telegram, calls } = recordingTelegram()
+    const cases = [
+        [
+            'editMessageText',
+            (extra, text) =>
+                telegram.editMessageText(42, 12, undefined, text, extra),
+        ],
+        [
+            'editMessageText',
+            (extra, text) =>
+                telegram.editMessageText(
+                    undefined,
+                    undefined,
+                    'inline-1',
+                    text,
+                    extra
+                ),
+        ],
+        [
+            'editEphemeralMessageText',
+            (extra, text) =>
+                telegram.editEphemeralMessageText(42, 'eph-1', text, extra),
+        ],
+    ]
+
+    for (const [method, call] of cases) {
+        for (const text of ['text', '', bold('text')]) {
+            t.throws(() => call({ rich_message: richMarkdown }, text), {
+                message: `Telegram: ${method} accepts either text or extra.rich_message, not both`,
+            })
+        }
+        for (const extra of [undefined, {}, { rich_message: undefined }]) {
+            t.throws(() => call(extra, undefined), {
+                message: `Telegram: ${method} requires either text or extra.rich_message`,
+            })
+        }
+    }
+    t.deepEqual(calls, [])
+})
+
+test('Context text edit helpers forward rich messages', async (t) => {
+    const { telegram, calls } = recordingTelegram()
+    const fromMessage = new Context(
+        callbackUpdate(ephemeralMessage),
+        telegram,
+        botInfo
+    )
+    const fromInline = new Context(inlineCallbackUpdate, telegram, botInfo)
+
+    await fromMessage.editMessageText(undefined, { rich_message: richBlocks })
+    await fromInline.editMessageText(undefined, {
+        rich_message: richMarkdown,
+        reply_markup: inlineMarkup,
+    })
+    await fromMessage.editEphemeralMessageText(undefined, {
+        rich_message: richBlocks,
+    })
+    await fromMessage.editEphemeralMessageText(undefined, {
+        rich_message: richMarkdown,
+        ephemeral_message_id: 'eph-other',
+    })
+    // text edits keep working through the same helpers
+    await fromMessage.editMessageText('plain', { parse_mode: 'HTML' })
+    await fromMessage.editEphemeralMessageText('plain')
+
+    const untouched = {
+        entities: undefined,
+        parse_mode: undefined,
+        reply_markup: undefined,
+        link_preview_options: undefined,
+        business_connection_id: undefined,
+    }
+    t.deepEqual(calls, [
+        [
+            'editMessageText',
+            {
+                ...untouched,
+                rich_message: richBlocks,
+                chat_id: 42,
+                message_id: 12,
+            },
+        ],
+        [
+            'editMessageText',
+            {
+                ...untouched,
+                reply_markup: inlineMarkup,
+                rich_message: richMarkdown,
+                inline_message_id: 'inline-1',
+            },
+        ],
+        [
+            'editEphemeralMessageText',
+            {
+                chat_id: 42,
+                ephemeral_message_id: 'eph-1',
+                rich_message: richBlocks,
+            },
+        ],
+        [
+            'editEphemeralMessageText',
+            {
+                chat_id: 42,
+                ephemeral_message_id: 'eph-other',
+                rich_message: richMarkdown,
+            },
+        ],
+        [
+            'editMessageText',
+            {
+                ...untouched,
+                parse_mode: 'HTML',
+                text: 'plain',
+                chat_id: 42,
+                message_id: 12,
+            },
+        ],
+        [
+            'editEphemeralMessageText',
+            { chat_id: 42, ephemeral_message_id: 'eph-1', text: 'plain' },
+        ],
+    ])
+
+    // invalid combinations are rejected before reaching the API
+    t.throws(
+        () =>
+            fromMessage.editEphemeralMessageText('text', {
+                rich_message: richMarkdown,
+            }),
+        {
+            message:
+                'Telegram: editEphemeralMessageText accepts either text or extra.rich_message, not both',
+        }
+    )
+    t.throws(() => fromMessage.editMessageText(undefined), {
+        message:
+            'Telegram: editMessageText requires either text or extra.rich_message',
+    })
+    t.is(calls.length, 6)
+})
+
+test('rich messages and rich edits serialize to the Bot API as JSON', async (t) => {
+    const { telegram, requests } = fetchRecordingTelegram()
+
+    t.true(
+        await telegram.sendRichMessage({
+            chat_id: 42,
+            message_thread_id: undefined,
+            rich_message: richBlocks,
+        })
+    )
+    await telegram.sendRichMessageDraft({
+        chat_id: 42,
+        draft_id: 5,
+        rich_message: richMarkdown,
+        can_stop: true,
+    })
+    await telegram.editMessageText(42, 12, undefined, undefined, {
+        rich_message: richBlocks,
+    })
+    await telegram.editEphemeralMessageText(42, 'eph-1', undefined, {
+        rich_message: richMarkdown,
+    })
+
+    // undefined fields are dropped from the wire payload; URL and web app buttons stay plain JSON
+    t.deepEqual(requests, [
+        [
+            'sendRichMessage',
+            'application/json',
+            { chat_id: 42, rich_message: richBlocks },
+        ],
+        [
+            'sendRichMessageDraft',
+            'application/json',
+            {
+                chat_id: 42,
+                draft_id: 5,
+                rich_message: richMarkdown,
+                can_stop: true,
+            },
+        ],
+        [
+            'editMessageText',
+            'application/json',
+            { chat_id: 42, message_id: 12, rich_message: richBlocks },
+        ],
+        [
+            'editEphemeralMessageText',
+            'application/json',
+            {
+                chat_id: 42,
+                ephemeral_message_id: 'eph-1',
+                rich_message: richMarkdown,
+            },
+        ],
+    ])
+})
+
+test('Bot API objects with a url are not mistaken for URL files', async (t) => {
+    const { telegram, requests } = fetchRecordingTelegram()
+    const link = { type: 'link', url: 'https://example.test/link' }
+    const webApp = { url: 'https://example.test/app' }
+
+    await telegram.sendRichMessage({ chat_id: 1, rich_message: richBlocks })
+    await telegram.editMessageMedia(1, 2, undefined, link)
+    await telegram.editEphemeralMessageMedia(1, 'eph-1', link)
+    await telegram.sendChatJoinRequestWebApp({ query_id: 'q', web_app: webApp })
+    await telegram.setChatMenuButton({
+        chatId: 1,
+        menuButton: { type: 'web_app', text: 'App', web_app: webApp },
+    })
+    await telegram.sendMessage(1, 'hi', {
+        entities: [
+            {
+                type: 'text_link',
+                offset: 0,
+                length: 2,
+                url: 'https://example.test',
+            },
+        ],
+        reply_markup: {
+            inline_keyboard: [
+                [
+                    { text: 'Docs', url: 'https://example.test/docs' },
+                    {
+                        text: 'Login',
+                        login_url: { url: 'https://example.test/login' },
+                    },
+                ],
+            ],
+        },
+    })
+
+    t.deepEqual(
+        requests.map(([method, kind]) => [method, kind]),
+        [
+            ['sendRichMessage', 'application/json'],
+            ['editMessageMedia', 'application/json'],
+            ['editEphemeralMessageMedia', 'application/json'],
+            ['sendChatJoinRequestWebApp', 'application/json'],
+            ['setChatMenuButton', 'application/json'],
+            ['sendMessage', 'application/json'],
+        ]
+    )
+    t.deepEqual(requests[1][2].media, link)
+    t.deepEqual(requests[3][2].web_app, webApp)
+})
+
+test('URL files are still downloaded and uploaded', async (t) => {
+    const { telegram, requests } = fetchRecordingTelegram()
+
+    await telegram.sendPhoto(1, { url: 'https://example.test/plain.png' })
+    await telegram.sendPhoto(
+        1,
+        Input.fromURLStream('https://example.test/stream.png', 'stream.png')
+    )
+    await telegram.sendMediaGroup(1, [
+        { type: 'photo', media: { url: 'https://example.test/nested.png' } },
+        { type: 'photo', media: 'photo-id' },
+    ])
+    await telegram.sendRichMessage({
+        chat_id: 1,
+        rich_message: {
+            markdown: '![x](tg://photo?id=x)',
+            media: [
+                {
+                    id: 'x',
+                    media: {
+                        type: 'photo',
+                        media: Input.fromURLStream(
+                            'https://example.test/rich.png'
+                        ),
+                    },
+                },
+            ],
+        },
+    })
+
+    t.deepEqual(
+        requests.map(([method, kind]) => [method, kind]),
+        [
+            ['https://example.test/plain.png', 'download'],
+            ['sendPhoto', 'multipart/form-data'],
+            ['https://example.test/stream.png', 'download'],
+            ['sendPhoto', 'multipart/form-data'],
+            ['https://example.test/nested.png', 'download'],
+            ['sendMediaGroup', 'multipart/form-data'],
+            ['https://example.test/rich.png', 'download'],
+            ['sendRichMessage', 'multipart/form-data'],
+        ]
+    )
+})
+
+test('rich message media uploads are sent as multipart attachments', async (t) => {
+    const sent = await captureBotApiRequest((telegram) =>
+        telegram.sendRichMessage({
+            chat_id: 42,
+            rich_message: {
+                markdown: '![chart](tg://photo?id=chart)',
+                media: [
+                    {
+                        id: 'chart',
+                        media: {
+                            type: 'photo',
+                            media: Input.fromBuffer(
+                                Buffer.from('chart-bytes'),
+                                'chart.png'
+                            ),
+                        },
+                    },
+                ],
+            },
+            ephemeral_message_parameters: ephemeralParams,
+        })
+    )
+
+    t.true(sent.result)
+    t.is(sent.url, '/bot123:abc/sendRichMessage')
+    t.regex(sent.headers['content-type'], /^multipart\/form-data/)
+    t.is(getMultipartField(sent.body, 'chat_id'), '42')
+    t.deepEqual(
+        JSON.parse(
+            getMultipartField(sent.body, 'ephemeral_message_parameters')
+        ),
+        ephemeralParams
+    )
+    const richMessage = JSON.parse(getMultipartField(sent.body, 'rich_message'))
+    t.is(richMessage.markdown, '![chart](tg://photo?id=chart)')
+    t.is(richMessage.media[0].id, 'chart')
+    t.is(richMessage.media[0].media.type, 'photo')
+    const attachment = /^attach:\/\/([0-9a-f]+)$/.exec(
+        richMessage.media[0].media.media
+    )
+    t.truthy(attachment)
+    t.true(sent.body.includes(`name="${attachment[1]}"`))
+    t.true(sent.body.includes('filename="chart.png"'))
+    t.true(sent.body.includes('chart-bytes'))
+
+    const edited = await captureBotApiRequest((telegram) =>
+        telegram.editMessageText(42, 12, undefined, undefined, {
+            rich_message: {
+                blocks: [
+                    {
+                        type: 'photo',
+                        photo: {
+                            type: 'photo',
+                            media: Input.fromBuffer(
+                                Buffer.from('edit-bytes'),
+                                'edit.png'
+                            ),
+                        },
+                    },
+                    { type: 'buttons', buttons: richButtons },
+                ],
+            },
+        })
+    )
+    t.is(edited.url, '/bot123:abc/editMessageText')
+    t.regex(edited.headers['content-type'], /^multipart\/form-data/)
+    t.is(getMultipartField(edited.body, 'message_id'), '12')
+    const editedRich = JSON.parse(
+        getMultipartField(edited.body, 'rich_message')
+    )
+    t.regex(editedRich.blocks[0].photo.media, /^attach:\/\/[0-9a-f]+$/)
+    // buttons with a url survive the multipart packing untouched
+    t.deepEqual(editedRich.blocks[1].buttons, richButtons)
+    t.true(edited.body.includes('edit-bytes'))
+    t.is(getMultipartField(edited.body, 'text'), null)
+})
+
+test('Context rich message helpers inherit chat, thread and business connection', async (t) => {
+    const cases = [
+        [
+            'plain message',
+            plainMessageUpdate,
+            {
+                chat_id: 42,
+                message_thread_id: undefined,
+                business_connection_id: undefined,
+            },
+        ],
+        [
+            'topic message',
+            topicMessageUpdate,
+            {
+                chat_id: 42,
+                message_thread_id: 9,
+                business_connection_id: undefined,
+            },
+        ],
+        [
+            'business message',
+            businessMessageUpdate,
+            {
+                chat_id: 42,
+                message_thread_id: undefined,
+                business_connection_id: 'biz-1',
+            },
+        ],
+        [
+            'callback query',
+            callbackUpdate(ephemeralMessage),
+            {
+                chat_id: 42,
+                message_thread_id: undefined,
+                business_connection_id: undefined,
+            },
+        ],
+        [
+            'chat join request',
+            chatJoinRequestUpdate,
+            {
+                chat_id: -100,
+                message_thread_id: undefined,
+                business_connection_id: undefined,
+            },
+        ],
+    ]
+
+    for (const [name, update, defaults] of cases) {
+        const { telegram, calls } = recordingTelegram()
+        const ctx = new Context(update, telegram, botInfo)
+
+        await ctx.sendRichMessage(richBlocks)
+        await ctx.replyWithRichMessage(richMarkdown, {
+            disable_notification: true,
+        })
+
+        t.deepEqual(
+            calls,
+            [
+                ['sendRichMessage', { ...defaults, rich_message: richBlocks }],
+                [
+                    'sendRichMessage',
+                    {
+                        ...defaults,
+                        disable_notification: true,
+                        rich_message: richMarkdown,
+                    },
+                ],
+            ],
+            name
+        )
+        t.is(calls[0][1].rich_message, richBlocks, name)
+    }
+})
+
+test('Context rich message extras override defaults but not the rich message', async (t) => {
+    const { telegram, calls } = recordingTelegram()
+    const ctx = new Context(topicMessageUpdate, telegram, botInfo)
+
+    await ctx.replyWithRichMessage(richMarkdown, {
+        message_thread_id: 10,
+        business_connection_id: 'biz-override',
+        ephemeral_message_parameters: ephemeralParams,
+        reply_parameters: { message_id: 5 },
+        reply_markup: inlineMarkup,
+        // not allowed by the types; the positional argument must still win for JS callers
+        rich_message: { markdown: 'ignored' },
+    })
+
+    t.deepEqual(calls, [
+        [
+            'sendRichMessage',
+            {
+                chat_id: 42,
+                message_thread_id: 10,
+                business_connection_id: 'biz-override',
+                ephemeral_message_parameters: ephemeralParams,
+                reply_parameters: { message_id: 5 },
+                reply_markup: inlineMarkup,
+                rich_message: richMarkdown,
+            },
+        ],
+    ])
+})
+
+test('Context.sendRichMessageDraft streams drafts to the current chat', async (t) => {
+    const { telegram, calls } = recordingTelegram()
+    const topic = new Context(topicMessageUpdate, telegram, botInfo)
+    const business = new Context(businessMessageUpdate, telegram, botInfo)
+
+    t.true(await topic.sendRichMessageDraft(7, { markdown: 'Thinking' }))
+    await topic.sendRichMessageDraft(7, richBlocks, {
+        can_stop: true,
+        keep_on_stop: true,
+        message_thread_id: 11,
+        // not allowed by the types; positional arguments must still win for JS callers
+        draft_id: 99,
+        rich_message: { markdown: 'ignored' },
+    })
+    await business.sendRichMessageDraft(8, richMarkdown)
+
+    t.deepEqual(calls, [
+        [
+            'sendRichMessageDraft',
+            {
+                chat_id: 42,
+                message_thread_id: 9,
+                draft_id: 7,
+                rich_message: { markdown: 'Thinking' },
+            },
+        ],
+        [
+            'sendRichMessageDraft',
+            {
+                chat_id: 42,
+                message_thread_id: 11,
+                can_stop: true,
+                keep_on_stop: true,
+                draft_id: 7,
+                rich_message: richBlocks,
+            },
+        ],
+        [
+            'sendRichMessageDraft',
+            {
+                chat_id: 42,
+                message_thread_id: undefined,
+                draft_id: 8,
+                rich_message: richMarkdown,
+            },
+        ],
+    ])
+    // sendRichMessageDraft has no business_connection_id parameter
+    t.false('business_connection_id' in calls[2][1])
+})
+
+test('Context rich message helpers throw without a chat and make no API call', (t) => {
+    const { telegram, calls } = recordingTelegram()
+    const ctx = new Context(inlineQueryUpdate, telegram, botInfo)
+
+    for (const [call, method] of [
+        [() => ctx.sendRichMessage(richMarkdown), 'sendRichMessage'],
+        // replyWithRichMessage delegates to sendRichMessage, like reply does to sendMessage
+        [() => ctx.replyWithRichMessage(richMarkdown), 'sendRichMessage'],
+        [
+            () => ctx.sendRichMessageDraft(1, richMarkdown),
+            'sendRichMessageDraft',
+        ],
+    ]) {
+        t.throws(call, {
+            instanceOf: TypeError,
+            message: `Telegraf: "${method}" isn't available for "inline_query"`,
+        })
+    }
+    t.deepEqual(calls, [])
+})
+
+test('useNewReplies makes replyWithRichMessage reply to the incoming message', async (t) => {
+    const cases = [
+        ['plain message', plainMessageUpdate, 13],
+        ['topic message', topicMessageUpdate, 5],
+        ['business message', businessMessageUpdate, 6],
+        ['callback query', callbackUpdate(ephemeralMessage), 12],
+    ]
+
+    for (const [name, update, messageId] of cases) {
+        const { telegram, calls } = recordingTelegram()
+        const ctx = new Context(update, telegram, botInfo)
+
+        await ctx.sendRichMessage(richMarkdown)
+        await withNewReplies(ctx, (replyCtx) =>
+            replyCtx.replyWithRichMessage(richMarkdown)
+        )
+
+        const [[, plain], [method, reply]] = calls
+        t.is(method, 'sendRichMessage', name)
+        // same chat, thread and business connection as the regular helper, plus reply_parameters
+        t.deepEqual(
+            reply,
+            { ...plain, reply_parameters: { message_id: messageId } },
+            name
+        )
+    }
+})
+
+test('useNewReplies replyWithRichMessage honours reply options and non-message updates', async (t) => {
+    const { telegram, calls } = recordingTelegram()
+    const topic = new Context(topicMessageUpdate, telegram, botInfo)
+    const joinRequest = new Context(chatJoinRequestUpdate, telegram, botInfo)
+    const inaccessible = new Context(
+        callbackUpdate({ chat: privateChat, message_id: 12, date: 0 }),
+        telegram,
+        botInfo
+    )
+
+    await withNewReplies(topic, async (ctx) => {
+        await ctx.replyWithRichMessage(richBlocks, {
+            reply_parameters: { message_id: 3, quote: 'question' },
+            message_thread_id: 10,
+            business_connection_id: 'biz-override',
+        })
+        // sendRichMessage is not affected by useNewReplies
+        await ctx.sendRichMessage(richMarkdown)
+    })
+    // nothing to reply to: sends a normal message
+    await withNewReplies(joinRequest, (ctx) =>
+        ctx.replyWithRichMessage(richMarkdown)
+    )
+    // inaccessible messages can still be replied to by id, but carry no thread
+    await withNewReplies(inaccessible, (ctx) =>
+        ctx.replyWithRichMessage(richMarkdown)
+    )
+
+    t.deepEqual(calls, [
+        [
+            'sendRichMessage',
+            {
+                chat_id: 42,
+                message_thread_id: 10,
+                business_connection_id: 'biz-override',
+                reply_parameters: { message_id: 3, quote: 'question' },
+                rich_message: richBlocks,
+            },
+        ],
+        [
+            'sendRichMessage',
+            {
+                chat_id: 42,
+                message_thread_id: 9,
+                business_connection_id: undefined,
+                rich_message: richMarkdown,
+            },
+        ],
+        [
+            'sendRichMessage',
+            {
+                chat_id: -100,
+                message_thread_id: undefined,
+                business_connection_id: undefined,
+                rich_message: richMarkdown,
+            },
+        ],
+        [
+            'sendRichMessage',
+            {
+                chat_id: 42,
+                message_thread_id: undefined,
+                business_connection_id: undefined,
+                reply_parameters: { message_id: 12 },
+                rich_message: richMarkdown,
+            },
+        ],
+    ])
+
+    const noChat = new Context(inlineQueryUpdate, telegram, botInfo)
+    await withNewReplies(noChat, (ctx) => {
+        t.throws(() => ctx.replyWithRichMessage(richMarkdown), {
+            instanceOf: TypeError,
+            message: `Telegraf: "replyWithRichMessage" isn't available for "inline_query"`,
+        })
+    })
+    t.is(calls.length, 4)
+})
+
+test('useNewReplies overrides every Context reply helper', async (t) => {
+    const replyHelpers = Object.getOwnPropertyNames(Context.prototype).filter(
+        (name) =>
+            name.startsWith('reply') &&
+            typeof Object.getOwnPropertyDescriptor(Context.prototype, name)
+                .value === 'function'
+    )
+    const ctx = new Context(
+        plainMessageUpdate,
+        recordingTelegram().telegram,
+        botInfo
+    )
+
+    await withNewReplies(ctx, () => {})
+
+    t.true(replyHelpers.includes('replyWithRichMessage'))
+    // fails when a reply helper is added to Context without wiring it into useNewReplies
+    t.deepEqual(
+        replyHelpers.filter((name) => ctx[name] === Context.prototype[name]),
+        []
+    )
+})
+
+test('getChatAdministrators forwards return_bots', async (t) => {
+    const { telegram, calls } = recordingTelegram([])
+    const ctx = new Context(plainMessageUpdate, telegram, botInfo)
+
+    await telegram.getChatAdministrators(42)
+    await telegram.getChatAdministrators('@channel', { return_bots: true })
+    await ctx.getChatAdministrators({ return_bots: false })
+
+    t.deepEqual(calls, [
+        ['getChatAdministrators', { chat_id: 42 }],
+        ['getChatAdministrators', { chat_id: '@channel', return_bots: true }],
+        ['getChatAdministrators', { chat_id: 42, return_bots: false }],
+    ])
+})
+
+test('Bot API 10.3 rich message fields are typed', (t) => {
+    const files = {
+        markup: readTypeFile('markup'),
+        message: readTypeFile('message'),
+        methods: readTypeFile('methods'),
+    }
+    const send = getMethodArgs(files.methods, 'sendRichMessage')
+    const draft = getMethodArgs(files.methods, 'sendRichMessageDraft')
+    const inputRichMessage = getTypeAlias(files.methods, 'InputRichMessage<F>')
+    const textVariant = 'text: string; rich_message?: undefined;'
+    const richVariant = 'text?: undefined; rich_message: InputRichMessage<F>;'
+    const editMessageText = getMethodArgTypes('editMessageText')
+    const editEphemeralMessageText = getMethodArgTypes(
+        'editEphemeralMessageText'
+    )
+    const checks = {
+        'sendRichMessage.chat_id': hasField(send, 'chat_id', 'number | string'),
+        'sendRichMessage.rich_message': hasField(
+            send,
+            'rich_message',
+            'InputRichMessage<F>'
+        ),
+        'sendRichMessage.business_connection_id': hasOptionalField(
+            send,
+            'business_connection_id',
+            'string'
+        ),
+        'sendRichMessage.message_thread_id': hasOptionalField(
+            send,
+            'message_thread_id',
+            'number'
+        ),
+        'sendRichMessage.ephemeral_message_parameters': hasOptionalField(
+            send,
+            'ephemeral_message_parameters',
+            'EphemeralMessageParameters'
+        ),
+        'sendRichMessage returns RichMessageMessage':
+            getMethodReturnType(files.methods, 'sendRichMessage') ===
+            'Message.RichMessageMessage & Message.BusinessSentMessage',
+        'sendRichMessageDraft.chat_id': hasField(draft, 'chat_id', 'number'),
+        'sendRichMessageDraft.draft_id': hasField(draft, 'draft_id', 'number'),
+        'sendRichMessageDraft.rich_message': hasField(
+            draft,
+            'rich_message',
+            'InputRichMessage<F>'
+        ),
+        'sendRichMessageDraft.can_stop/keep_on_stop':
+            hasOptionalField(draft, 'can_stop', 'boolean') &&
+            hasOptionalField(draft, 'keep_on_stop', 'boolean'),
+        'sendRichMessageDraft.message_thread_id': hasOptionalField(
+            draft,
+            'message_thread_id',
+            'number'
+        ),
+        'sendRichMessageDraft has no business_connection_id': !hasAnyField(
+            draft,
+            'business_connection_id'
+        ),
+        'sendRichMessageDraft returns true':
+            getMethodReturnType(files.methods, 'sendRichMessageDraft') ===
+            'true',
+        'editMessageText text or rich_message (chat and inline overloads)':
+            editMessageText.length === 2 &&
+            editMessageText.every(
+                (args) =>
+                    args.includes(textVariant) && args.includes(richVariant)
+            ),
+        'editEphemeralMessageText text or rich_message':
+            editEphemeralMessageText.length === 1 &&
+            editEphemeralMessageText[0].includes(textVariant) &&
+            editEphemeralMessageText[0].includes(richVariant),
+        'InputRichMessage content variants': [
+            'blocks: ReadonlyArray<InputRichBlock<F>>;',
+            'html: string;',
+            'markdown: string;',
+            'media?: ReadonlyArray<InputRichMessageMedia<F>>;',
+        ].every((member) => inputRichMessage.includes(member)),
+        'InputRichBlock includes buttons': hasTypeMember(
+            files.methods,
+            'InputRichBlock<F>',
+            'RichBlockButtons'
+        ),
+        'RichBlockButtons.buttons': hasField(
+            getInterface(files.message, 'RichBlockButtons'),
+            'buttons',
+            'RichMessageButton[]'
+        ),
+        RichMessageButton: [
+            'RichMessageButton.UrlButton',
+            'RichMessageButton.CallbackButton',
+            'RichMessageButton.WebAppButton',
+        ].every((member) =>
+            hasTypeMember(files.markup, 'RichMessageButton', member)
+        ),
+        'Message.rich_message': hasField(
+            getInterface(files.message, 'RichMessageMessage'),
+            'rich_message',
+            'RichMessage'
+        ),
+        'RichMessage.blocks': hasField(
+            getInterface(files.message, 'RichMessage'),
+            'blocks',
+            'RichBlock[]'
+        ),
+        'getChatAdministrators.return_bots': hasOptionalField(
+            getMethodArgs(files.methods, 'getChatAdministrators'),
+            'return_bots',
+            'boolean'
+        ),
+    }
+    const missing = Object.entries(checks)
+        .filter(([, ok]) => !ok)
+        .map(([name]) => name)
+    t.deepEqual(missing, [])
+})
+
+// Telegram entry points for every method whose Bot API args accept rich_message
+const telegramRichMessageCalls = {
+    editEphemeralMessageText: (tg, rich_message) =>
+        tg.editEphemeralMessageText(42, 'eph-1', undefined, { rich_message }),
+    editMessageText: (tg, rich_message) =>
+        tg.editMessageText(42, 12, undefined, undefined, { rich_message }),
+    sendRichMessage: (tg, rich_message) =>
+        tg.sendRichMessage({ chat_id: 42, rich_message }),
+    sendRichMessageDraft: (tg, rich_message) =>
+        tg.sendRichMessageDraft({ chat_id: 42, draft_id: 1, rich_message }),
+}
+// Context helpers reaching those methods, keyed by helper name
+const contextRichMessageCalls = {
+    editEphemeralMessageText: (ctx, rich_message) =>
+        ctx.editEphemeralMessageText(undefined, { rich_message }),
+    editMessageText: (ctx, rich_message) =>
+        ctx.editMessageText(undefined, { rich_message }),
+    replyWithRichMessage: (ctx, rich_message) =>
+        ctx.replyWithRichMessage(rich_message),
+    sendRichMessage: (ctx, rich_message) => ctx.sendRichMessage(rich_message),
+    sendRichMessageDraft: (ctx, rich_message) =>
+        ctx.sendRichMessageDraft(1, rich_message),
+}
+
+test('rich_message coverage matches the Bot API types', async (t) => {
+    const typed = readMethodsAcceptingField('rich_message')
+
+    // fails when the types add or drop rich_message support on a method
+    t.deepEqual(Object.keys(telegramRichMessageCalls).sort(), typed)
+
+    for (const [method, call] of Object.entries(telegramRichMessageCalls)) {
+        const { telegram, calls } = recordingTelegram()
+        await call(telegram, richBlocks)
+        t.deepEqual(
+            calls.map(([name]) => name),
+            [method]
+        )
+        t.is(calls[0][1].rich_message, richBlocks, method)
+        t.false('text' in calls[0][1], method)
+    }
+
+    const reached = new Set()
+    for (const [helper, call] of Object.entries(contextRichMessageCalls)) {
+        const { telegram, calls } = recordingTelegram()
+        const ctx = new Context(
+            callbackUpdate(ephemeralMessage),
+            telegram,
+            botInfo
+        )
+        await call(ctx, richBlocks)
+        t.is(calls.length, 1, helper)
+        t.is(calls[0][1].rich_message, richBlocks, helper)
+        reached.add(calls[0][0])
+    }
+    // every rich_message method is reachable from Context
+    t.deepEqual([...reached].sort(), typed)
+})
+
+test('rich message APIs are typed for Telegram and Context', (t) => {
+    compileTypeScript(
+        'rich-message-types.ts',
+        [
+            `import { Context, Input, Telegram } from '${packageRoot}'`,
+            `import type { Convenience, InputRichBlock, InputRichMessage, Message, RichMessage, RichMessageButton } from '${packageRoot}/types'`,
+            '',
+            'declare const ctx: Context',
+            'declare const telegram: Telegram',
+            '',
+            'const buttons: RichMessageButton[] = [',
+            '    { text: "Docs", url: "https://example.test" },',
+            '    { text: "More", callback_data: "more", style: "primary" },',
+            '    { text: "App", web_app: { url: "https://example.test/app" } },',
+            ']',
+            'const blocks: InputRichBlock[] = [',
+            '    { type: "heading", text: "Report", size: 1 },',
+            '    { type: "paragraph", text: ["Totals ", { type: "bold", text: "42" }] },',
+            '    { type: "divider" },',
+            '    { type: "buttons", buttons, align: "center" },',
+            '    { type: "photo", photo: { type: "photo", media: Input.fromBuffer(Buffer.from("x"), "x.png") } },',
+            ']',
+            'const rich: InputRichMessage = { blocks }',
+            'const withMedia: InputRichMessage = {',
+            '    markdown: "![chart](tg://photo?id=chart)",',
+            '    media: [{ id: "chart", media: { type: "photo", media: Input.fromBuffer(Buffer.from("x")) } }],',
+            '}',
+            'const extra: Convenience.ExtraRichMessage = { protect_content: true, ephemeral_message_parameters: { receiver_user_id: 1 } }',
+            'const draftExtra: Convenience.ExtraRichMessageDraft = { can_stop: true, keep_on_stop: true }',
+            '',
+            '// sending',
+            'const sent: Promise<Message.RichMessageMessage & Message.BusinessSentMessage> = ctx.replyWithRichMessage(rich, extra)',
+            'const sent2 = ctx.sendRichMessage(withMedia, { reply_markup: { inline_keyboard: [] } })',
+            'const draft: Promise<true> = ctx.sendRichMessageDraft(1, { markdown: "partial" }, draftExtra)',
+            'async function readBack() {',
+            '    const content: RichMessage = (await sent2).rich_message',
+            '    return content.blocks',
+            '}',
+            'const direct: Promise<Message.RichMessageMessage & Message.BusinessSentMessage> = telegram.sendRichMessage({ chat_id: "@channel", rich_message: { html: "<b>hi</b>" } })',
+            'const directDraft: Promise<true> = telegram.sendRichMessageDraft({ chat_id: 1, draft_id: 2, rich_message: rich })',
+            '',
+            '// editing into rich messages',
+            'void telegram.editMessageText(1, 2, undefined, undefined, { rich_message: rich, reply_markup: { inline_keyboard: [] } })',
+            'void telegram.editMessageText(undefined, undefined, "inline", undefined, { rich_message: withMedia })',
+            'void telegram.editEphemeralMessageText(1, "eph", undefined, { rich_message: rich })',
+            'void ctx.editMessageText(undefined, { rich_message: rich })',
+            'void ctx.editEphemeralMessageText(undefined, { rich_message: rich, ephemeral_message_id: "eph" })',
+            '',
+            '// text edits keep their signatures',
+            'void telegram.editMessageText(1, 2, undefined, "hi", { parse_mode: "HTML" })',
+            'void telegram.editEphemeralMessageText(1, "eph", "hi")',
+            'void ctx.editMessageText("hi")',
+            'void ctx.editEphemeralMessageText("hi", { ephemeral_message_id: "eph" })',
+            '',
+            '// return_bots',
+            'void telegram.getChatAdministrators(1, { return_bots: true })',
+            'void ctx.getChatAdministrators({ return_bots: true })',
+            '',
+            '// @ts-expect-error rich_message needs blocks, html or markdown',
+            'void ctx.replyWithRichMessage({ is_rtl: true })',
+            '// @ts-expect-error blocks and markdown are mutually exclusive',
+            'void ctx.replyWithRichMessage({ blocks: [], markdown: "x" })',
+            '// @ts-expect-error unknown block type',
+            'void ctx.replyWithRichMessage({ blocks: [{ type: "not-a-block" }] })',
+            '// @ts-expect-error rich_message is positional on Context',
+            'void ctx.replyWithRichMessage(rich, { rich_message: rich })',
+            '// @ts-expect-error draft_id is positional on Context',
+            'void ctx.sendRichMessageDraft(1, rich, { draft_id: 2 })',
+            '// @ts-expect-error drafts have no business connection',
+            'void ctx.sendRichMessageDraft(1, rich, { business_connection_id: "biz" })',
+            '// @ts-expect-error RichMessageButton is not any',
+            'const notAButton: RichMessageButton = { nope: true }',
+            '// @ts-expect-error drafts target private chats by numeric id',
+            'void telegram.sendRichMessageDraft({ chat_id: "@channel", draft_id: 1, rich_message: rich })',
+            '// @ts-expect-error sendRichMessage requires rich_message',
+            'void telegram.sendRichMessage({ chat_id: 1 })',
+            '// @ts-expect-error text and rich_message are mutually exclusive',
+            'void ctx.editMessageText("hi", { rich_message: rich })',
+            '// @ts-expect-error text and rich_message are mutually exclusive',
+            'void telegram.editEphemeralMessageText(1, "eph", "hi", { rich_message: rich })',
+            '// @ts-expect-error one of text or rich_message is required',
+            'void ctx.editMessageText(undefined)',
+            '// @ts-expect-error one of text or rich_message is required',
+            'void telegram.editEphemeralMessageText(1, "eph", undefined, { parse_mode: "HTML" })',
+            '',
+            'void [sent, draft, readBack, direct, directDraft, notAButton]',
         ].join('\n')
     )
     t.pass()
