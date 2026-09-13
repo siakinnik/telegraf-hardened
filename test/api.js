@@ -2576,6 +2576,723 @@ test('rich message APIs are typed for Telegram and Context', (t) => {
     t.pass()
 })
 
+// Bot API 10.3: guest mode, subscriptions, stopped generation and managed bots
+
+const { Telegraf } = require('../')
+
+const guestUser = { id: 99, is_bot: false, first_name: 'User' }
+const managedBotUser = { id: 555, is_bot: true, first_name: 'Managed' }
+const guestChat = { id: 1000, type: 'private' }
+const guestMessage = {
+    message_id: 1,
+    date: 1,
+    chat: guestChat,
+    from: guestUser,
+    text: 'hi from another bot',
+    guest_query_id: 'gq-1',
+}
+const guestMessageUpdate = { update_id: 30, guest_message: guestMessage }
+const subscriptionUpdate = {
+    update_id: 31,
+    subscription: {
+        user: guestUser,
+        invoice_payload: 'plan-pro',
+        state: 'active',
+    },
+}
+const stoppedGenerationUpdate = {
+    update_id: 32,
+    stopped_message_generation: {
+        chat: privateChat,
+        draft_id: 9,
+        message_thread_id: 4,
+    },
+}
+const managedBotUpdate = {
+    update_id: 33,
+    managed_bot: { user: guestUser, bot: managedBotUser },
+}
+const NEW_UPDATE_GETTERS = {
+    guest_message: 'guestMessage',
+    subscription: 'subscription',
+    stopped_message_generation: 'stoppedMessageGeneration',
+    managed_bot: 'managedBot',
+}
+
+/** `[interface, payload key]` for every member of the `Update` union in the installed types */
+function readUpdateTypesFromTypes() {
+    const source = ts.createSourceFile(
+        'update.d.ts',
+        readTypeFile('update'),
+        ts.ScriptTarget.Latest,
+        true
+    )
+    const interfaces = new Map()
+    let unionMembers = []
+    const visit = (node) => {
+        if (ts.isInterfaceDeclaration(node)) {
+            interfaces.set(
+                node.name.text,
+                node.members.map((member) => member.name?.text).filter(Boolean)
+            )
+        }
+        if (
+            ts.isTypeAliasDeclaration(node) &&
+            node.name.text === 'Update' &&
+            ts.isUnionTypeNode(node.type)
+        ) {
+            unionMembers = node.type.types.map((member) =>
+                member.getText(source).replace(/^Update\./, '')
+            )
+        }
+        ts.forEachChild(node, visit)
+    }
+    visit(source)
+    return unionMembers.map((name) => {
+        const keys = interfaces.get(name) ?? []
+        return [name, keys.length === 1 ? keys[0] : keys.join(',')]
+    })
+}
+
+const toGetterName = (key) =>
+    key.replace(/_([a-z])/g, (_, letter) => letter.toUpperCase())
+
+/** Telegraf whose requests go to a fake fetch; handleUpdate reuses these options, so nothing leaves the process */
+function offlineTelegraf(results = {}) {
+    const requests = []
+    const bot = new Telegraf('123:abc', {
+        telegram: {
+            fetch: async (url, init) => {
+                const method = String(url).split('/').pop()
+                requests.push([method, JSON.parse(init.body)])
+                return {
+                    status: 200,
+                    statusText: 'OK',
+                    json: async () => ({
+                        ok: true,
+                        result: method in results ? results[method] : true,
+                    }),
+                }
+            },
+        },
+    })
+    bot.botInfo = { ...botInfo, username: 'bot' }
+    return { bot, requests }
+}
+
+test('Telegram guest and managed bot wrappers pass arguments through unchanged', async (t) => {
+    const results = {
+        answerGuestQuery: { message_id: 77 },
+        getManagedBotAccessSettings: { can_manage_without_premium: true },
+        setManagedBotAccessSettings: true,
+        getUserPersonalChatMessages: [guestMessage],
+    }
+    const calls = []
+    const telegram = new Telegram('token')
+    telegram.callApi = (method, payload) => {
+        calls.push([method, payload])
+        return results[method]
+    }
+    const answer = {
+        guest_query_id: 'gq-1',
+        text: '<b>hi</b>',
+        parse_mode: 'HTML',
+        reply_markup: inlineMarkup,
+    }
+    const getSettings = { user_id: 555 }
+    const setSettings = {
+        user_id: 555,
+        access_settings: {
+            can_manage_without_premium: true,
+            allow_bot_to_bot_messages: false,
+        },
+    }
+    const personal = { user_id: 555, offset: 10, limit: 20 }
+
+    t.is(await telegram.answerGuestQuery(answer), results.answerGuestQuery)
+    t.is(
+        await telegram.getManagedBotAccessSettings(getSettings),
+        results.getManagedBotAccessSettings
+    )
+    t.true(await telegram.setManagedBotAccessSettings(setSettings))
+    t.is(
+        await telegram.getUserPersonalChatMessages(personal),
+        results.getUserPersonalChatMessages
+    )
+
+    t.deepEqual(calls, [
+        ['answerGuestQuery', answer],
+        ['getManagedBotAccessSettings', getSettings],
+        ['setManagedBotAccessSettings', setSettings],
+        ['getUserPersonalChatMessages', personal],
+    ])
+    for (const [index, args] of [
+        answer,
+        getSettings,
+        setSettings,
+        personal,
+    ].entries()) {
+        t.is(calls[index][1], args)
+    }
+})
+
+test('guest answers and access settings serialize to the Bot API as JSON', async (t) => {
+    const requests = []
+    const telegram = new Telegram('123:abc', {
+        fetch: async (url, init) => {
+            const method = String(url).split('/').pop()
+            requests.push([
+                method,
+                init.headers['content-type'],
+                JSON.parse(init.body),
+            ])
+            const result =
+                method === 'answerGuestQuery'
+                    ? { message_id: 77 }
+                    : method === 'getManagedBotAccessSettings'
+                    ? { allow_bot_to_bot_messages: true }
+                    : true
+            return {
+                status: 200,
+                statusText: 'OK',
+                json: async () => ({ ok: true, result }),
+            }
+        },
+    })
+
+    t.deepEqual(
+        await telegram.answerGuestQuery({
+            guest_query_id: 'gq-1',
+            text: 'hi',
+            parse_mode: undefined,
+            reply_markup: {
+                inline_keyboard: [
+                    [{ text: 'Docs', url: 'https://example.test' }],
+                ],
+            },
+        }),
+        { message_id: 77 }
+    )
+    t.deepEqual(await telegram.getManagedBotAccessSettings({ user_id: 555 }), {
+        allow_bot_to_bot_messages: true,
+    })
+    t.true(
+        await telegram.setManagedBotAccessSettings({
+            user_id: 555,
+            access_settings: { allow_bot_to_bot_messages: true },
+        })
+    )
+
+    t.deepEqual(requests, [
+        [
+            'answerGuestQuery',
+            'application/json',
+            {
+                guest_query_id: 'gq-1',
+                text: 'hi',
+                reply_markup: {
+                    inline_keyboard: [
+                        [{ text: 'Docs', url: 'https://example.test' }],
+                    ],
+                },
+            },
+        ],
+        ['getManagedBotAccessSettings', 'application/json', { user_id: 555 }],
+        [
+            'setManagedBotAccessSettings',
+            'application/json',
+            {
+                user_id: 555,
+                access_settings: { allow_bot_to_bot_messages: true },
+            },
+        ],
+    ])
+})
+
+test('Context.answerGuestQuery answers the guest query of the update', async (t) => {
+    const { bold } = require('../format')
+    const { telegram, calls } = recordingTelegram({ message_id: 77 })
+    const ctx = new Context(guestMessageUpdate, telegram, botInfo)
+
+    t.deepEqual(await ctx.answerGuestQuery('plain'), { message_id: 77 })
+    await ctx.answerGuestQuery(bold('formatted'), {
+        parse_mode: 'HTML',
+        reply_markup: inlineMarkup,
+    })
+    await ctx.answerGuestQuery('<i>html</i>', {
+        parse_mode: 'HTML',
+        // not allowed by the types; positional values must still win for JS callers
+        guest_query_id: 'other',
+        text: 'ignored',
+    })
+
+    t.deepEqual(calls, [
+        ['answerGuestQuery', { text: 'plain', guest_query_id: 'gq-1' }],
+        [
+            'answerGuestQuery',
+            {
+                reply_markup: inlineMarkup,
+                // entities from FmtString win over a parse_mode passed in extra
+                parse_mode: undefined,
+                text: 'formatted',
+                entities: boldEntities(9),
+                guest_query_id: 'gq-1',
+            },
+        ],
+        [
+            'answerGuestQuery',
+            { parse_mode: 'HTML', text: '<i>html</i>', guest_query_id: 'gq-1' },
+        ],
+    ])
+})
+
+test('Context.answerGuestQuery throws without a guest query and makes no API call', (t) => {
+    const { telegram, calls } = recordingTelegram()
+    const cases = [
+        ['subscription', subscriptionUpdate],
+        ['stopped_message_generation', stoppedGenerationUpdate],
+        ['inline_query', inlineQueryUpdate],
+        [
+            'guest_message',
+            {
+                update_id: 34,
+                guest_message: { ...guestMessage, guest_query_id: undefined },
+            },
+        ],
+        // a regular message carrying guest_query_id is not a guest query
+        ['message', { update_id: 35, message: guestMessage }],
+    ]
+
+    for (const [updateType, update] of cases) {
+        const ctx = new Context(update, telegram, botInfo)
+        t.throws(() => ctx.answerGuestQuery('hi'), {
+            instanceOf: TypeError,
+            message: `Telegraf: "answerGuestQuery" isn't available for "${updateType}"`,
+        })
+    }
+    t.deepEqual(calls, [])
+})
+
+test('Context getters expose the new update payloads', (t) => {
+    const updates = {
+        guest_message: guestMessageUpdate,
+        subscription: subscriptionUpdate,
+        stopped_message_generation: stoppedGenerationUpdate,
+        managed_bot: managedBotUpdate,
+    }
+
+    for (const [key, update] of Object.entries(updates)) {
+        const ctx = new Context(update, {}, botInfo)
+        t.is(ctx.updateType, key)
+        for (const [otherKey, getter] of Object.entries(NEW_UPDATE_GETTERS)) {
+            if (otherKey === key) t.is(ctx[getter], update[key], getter)
+            else t.is(ctx[getter], undefined, `${getter} on ${key}`)
+        }
+    }
+
+    const plain = new Context(plainMessageUpdate, {}, botInfo)
+    for (const getter of Object.values(NEW_UPDATE_GETTERS)) {
+        t.is(plain[getter], undefined, getter)
+    }
+})
+
+test('Context derives chat and from for the new update types', async (t) => {
+    const { telegram, calls } = recordingTelegram()
+    const subscription = new Context(subscriptionUpdate, telegram, botInfo)
+    const managed = new Context(managedBotUpdate, telegram, botInfo)
+    const stopped = new Context(stoppedGenerationUpdate, telegram, botInfo)
+    const guest = new Context(guestMessageUpdate, telegram, botInfo)
+
+    t.is(subscription.from, subscriptionUpdate.subscription.user)
+    t.is(subscription.chat, undefined)
+    // the creator of the managed bot, not the bot itself
+    t.is(managed.from, guestUser)
+    t.is(managed.chat, undefined)
+    t.is(stopped.chat, privateChat)
+    t.is(stopped.from, undefined)
+
+    // guest messages belong to another bot's chat: nothing is derived from them
+    t.is(guest.msg, undefined)
+    t.is(guest.msgId, undefined)
+    t.is(guest.chat, undefined)
+    t.is(guest.from, undefined)
+    t.throws(() => guest.reply('hi'), {
+        instanceOf: TypeError,
+        message: `Telegraf: "sendMessage" isn't available for "guest_message"`,
+    })
+
+    // chat-based helpers work after a user stops a generation
+    await stopped.sendMessage('generation stopped')
+    await stopped.sendRichMessageDraft(
+        stoppedGenerationUpdate.stopped_message_generation.draft_id,
+        richMarkdown,
+        {
+            message_thread_id:
+                stoppedGenerationUpdate.stopped_message_generation
+                    .message_thread_id,
+        }
+    )
+    t.deepEqual(calls, [
+        [
+            'sendMessage',
+            {
+                chat_id: 42,
+                message_thread_id: undefined,
+                business_connection_id: undefined,
+                text: 'generation stopped',
+            },
+        ],
+        [
+            'sendRichMessageDraft',
+            {
+                chat_id: 42,
+                message_thread_id: 4,
+                draft_id: 9,
+                rich_message: richMarkdown,
+            },
+        ],
+    ])
+})
+
+test('Telegraf routes the new update types to their handlers', async (t) => {
+    const { bot, requests } = offlineTelegraf({
+        answerGuestQuery: { message_id: 77 },
+    })
+    const seen = []
+
+    bot.on('message', (ctx) => {
+        seen.push(['message', ctx.updateType])
+    })
+    bot.on('guest_message', async (ctx) => {
+        seen.push(['guest_message', ctx.guestMessage.text])
+        t.deepEqual(await ctx.answerGuestQuery('hello'), { message_id: 77 })
+    })
+    bot.on('subscription', (ctx) => {
+        seen.push(['subscription', ctx.subscription.state, ctx.from.id])
+    })
+    bot.on('stopped_message_generation', async (ctx) => {
+        seen.push([
+            'stopped_message_generation',
+            ctx.stoppedMessageGeneration.draft_id,
+        ])
+        await ctx.sendMessage('stopped')
+    })
+    bot.on('managed_bot', (ctx) => {
+        seen.push(['managed_bot', ctx.managedBot.bot.id])
+    })
+    bot.use((ctx) => {
+        if (ctx.has(['guest_message', 'subscription'])) {
+            seen.push(['unreachable', ctx.updateType])
+        }
+    })
+
+    for (const update of [
+        guestMessageUpdate,
+        subscriptionUpdate,
+        stoppedGenerationUpdate,
+        managedBotUpdate,
+    ]) {
+        await bot.handleUpdate(update)
+    }
+
+    // guest messages are not delivered to message handlers
+    t.deepEqual(seen, [
+        ['guest_message', 'hi from another bot'],
+        ['subscription', 'active', 99],
+        ['stopped_message_generation', 9],
+        ['managed_bot', 555],
+    ])
+    t.deepEqual(requests, [
+        ['answerGuestQuery', { text: 'hello', guest_query_id: 'gq-1' }],
+        ['sendMessage', { chat_id: 42, text: 'stopped' }],
+    ])
+})
+
+test('ctx.has narrows to the new update types', async (t) => {
+    const { bot } = offlineTelegraf()
+    const matched = []
+
+    bot.use((ctx, next) => {
+        if (ctx.has('guest_message'))
+            matched.push(['guest', ctx.guestMessage.message_id])
+        if (ctx.has(['subscription', 'managed_bot']))
+            matched.push(['user', ctx.from.id])
+        if (ctx.has('stopped_message_generation'))
+            matched.push(['stopped', ctx.chat.id])
+        return next()
+    })
+
+    for (const update of [
+        guestMessageUpdate,
+        subscriptionUpdate,
+        stoppedGenerationUpdate,
+        managedBotUpdate,
+        plainMessageUpdate,
+    ]) {
+        await bot.handleUpdate(update)
+    }
+
+    t.deepEqual(matched, [
+        ['guest', 1],
+        ['user', 99],
+        ['stopped', 42],
+        ['user', 99],
+    ])
+})
+
+test('Context has a getter for every update type in the Bot API types', (t) => {
+    const updateTypes = readUpdateTypesFromTypes()
+
+    // the Bot API 10.3 names, not "bot_subscription"
+    for (const key of Object.keys(NEW_UPDATE_GETTERS)) {
+        t.true(
+            updateTypes.some(([, typed]) => typed === key),
+            key
+        )
+    }
+    t.false(updateTypes.some(([, typed]) => typed === 'bot_subscription'))
+
+    // fails when the types add an update type without a Context getter
+    t.deepEqual(
+        updateTypes.filter(
+            ([, key]) =>
+                typeof Object.getOwnPropertyDescriptor(
+                    Context.prototype,
+                    toGetterName(key)
+                )?.get !== 'function'
+        ),
+        []
+    )
+
+    for (const [name, key] of updateTypes) {
+        const payload = { marker: key }
+        const ctx = new Context({ update_id: 1, [key]: payload }, {}, botInfo)
+        t.is(ctx.updateType, key, name)
+        t.is(ctx[toGetterName(key)], payload, name)
+    }
+})
+
+test('Bot API 10.3 guest mode, subscription and managed bot fields are typed', (t) => {
+    const files = {
+        manage: readTypeFile('manage'),
+        message: readTypeFile('message'),
+        methods: readTypeFile('methods'),
+        update: readTypeFile('update'),
+    }
+    const answer = getMethodArgs(files.methods, 'answerGuestQuery')
+    const getSettings = getMethodArgs(
+        files.methods,
+        'getManagedBotAccessSettings'
+    )
+    const setSettings = getMethodArgs(
+        files.methods,
+        'setManagedBotAccessSettings'
+    )
+    const subscription = getInterface(files.manage, 'BotSubscriptionUpdated')
+    const stopped = getInterface(files.message, 'MessageGenerationStopped')
+    const accessSettings = getInterface(files.manage, 'BotAccessSettings')
+    const community = getInterface(files.manage, 'Community')
+    const checks = {
+        'Update.guest_message': hasField(
+            getInterface(files.update, 'GuestQueryUpdate'),
+            'guest_message',
+            'Message'
+        ),
+        'Update.subscription': hasField(
+            getInterface(files.update, 'BotSubscriptionUpdate'),
+            'subscription',
+            'BotSubscriptionUpdated'
+        ),
+        'Update.stopped_message_generation': hasField(
+            getInterface(files.update, 'StoppedMessageGenerationUpdate'),
+            'stopped_message_generation',
+            'MessageGenerationStopped'
+        ),
+        'Update union includes the 10.3 updates': [
+            'Update.GuestQueryUpdate',
+            'Update.BotSubscriptionUpdate',
+            'Update.StoppedMessageGenerationUpdate',
+            'Update.ManagedBotUpdate',
+        ].every((member) => hasTypeMember(files.update, 'Update', member)),
+        BotSubscriptionUpdated:
+            hasField(subscription, 'user', 'User') &&
+            hasField(subscription, 'invoice_payload', 'string') &&
+            hasField(subscription, 'state', '"active" | "canceled" | "failed"'),
+        MessageGenerationStopped:
+            hasField(stopped, 'chat', 'Chat') &&
+            hasField(stopped, 'draft_id', 'number') &&
+            hasOptionalField(stopped, 'message_thread_id', 'number'),
+        'Message.guest_query_id': hasOptionalField(
+            getInterface(files.message, 'CommonMessage'),
+            'guest_query_id',
+            'string'
+        ),
+        'answerGuestQuery args':
+            hasField(answer, 'guest_query_id', 'string') &&
+            hasField(answer, 'text', 'string') &&
+            hasOptionalField(answer, 'parse_mode', 'ParseMode') &&
+            hasOptionalField(answer, 'entities', 'MessageEntity[]') &&
+            hasOptionalField(answer, 'reply_markup', 'InlineKeyboardMarkup'),
+        'answerGuestQuery returns SentGuestMessage':
+            getMethodReturnType(files.methods, 'answerGuestQuery') ===
+                'SentGuestMessage' &&
+            hasField(
+                getInterface(files.message, 'SentGuestMessage'),
+                'message_id',
+                'number'
+            ),
+        BotAccessSettings:
+            hasOptionalField(
+                accessSettings,
+                'can_manage_without_premium',
+                'boolean'
+            ) &&
+            hasOptionalField(
+                accessSettings,
+                'allow_bot_to_bot_messages',
+                'boolean'
+            ),
+        'getManagedBotAccessSettings returns BotAccessSettings':
+            hasField(getSettings, 'user_id', 'number') &&
+            getMethodReturnType(
+                files.methods,
+                'getManagedBotAccessSettings'
+            ) === 'BotAccessSettings',
+        'setManagedBotAccessSettings.access_settings':
+            hasField(setSettings, 'user_id', 'number') &&
+            hasField(setSettings, 'access_settings', 'BotAccessSettings') &&
+            getMethodReturnType(
+                files.methods,
+                'setManagedBotAccessSettings'
+            ) === 'true',
+        Community:
+            hasField(community, 'id', 'string') &&
+            hasField(community, 'title', 'string') &&
+            hasOptionalField(community, 'photo', 'ChatPhoto') &&
+            hasOptionalField(community, 'invite_link', 'string'),
+        'ChatFullInfo.community': hasOptionalField(
+            files.manage,
+            'community',
+            'Community'
+        ),
+        'Message.community_chat_*':
+            hasField(
+                getInterface(files.message, 'CommunityChatAddedMessage'),
+                'community_chat_added',
+                'CommunityChatAdded'
+            ) &&
+            hasField(
+                getInterface(files.message, 'CommunityChatRemovedMessage'),
+                'community_chat_removed',
+                'CommunityChatRemoved'
+            ) &&
+            hasField(
+                getInterface(files.message, 'CommunityChatJoinedMessage'),
+                'community_chat_joined',
+                'CommunityChatJoined'
+            ),
+        'CommunityChat* carry the community': [
+            'CommunityChatAdded',
+            'CommunityChatRemoved',
+            'CommunityChatJoined',
+        ].every((name) =>
+            hasField(getInterface(files.manage, name), 'community', 'Community')
+        ),
+    }
+    const missing = Object.entries(checks)
+        .filter(([, ok]) => !ok)
+        .map(([name]) => name)
+    t.deepEqual(missing, [])
+})
+
+test('guest mode, subscription and managed bot APIs are typed', (t) => {
+    compileTypeScript(
+        'guest-mode-types.ts',
+        [
+            `import { Context, Telegraf, Telegram } from '${packageRoot}'`,
+            `import { message } from '${packageRoot}/filters'`,
+            `import { bold } from '${packageRoot}/format'`,
+            `import type { BotAccessSettings, BotSubscriptionUpdated, Chat, ChatFullInfo, Community, Convenience, ManagedBotUpdated, Message, MessageGenerationStopped, SentGuestMessage, Update, User } from '${packageRoot}/types'`,
+            '',
+            'declare const bot: Telegraf',
+            'declare const telegram: Telegram',
+            'declare const anyCtx: Context',
+            '',
+            'bot.on("guest_message", async (ctx) => {',
+            '    const guest: Message = ctx.guestMessage',
+            '    const answered: SentGuestMessage = await ctx.answerGuestQuery(bold("hi"), { reply_markup: { inline_keyboard: [] } })',
+            '    void [guest, answered]',
+            '})',
+            'bot.on("subscription", (ctx) => {',
+            '    const change: BotSubscriptionUpdated = ctx.subscription',
+            '    const state: "active" | "canceled" | "failed" = ctx.subscription.state',
+            '    const subscriber: User = ctx.from',
+            '    void [change, state, subscriber]',
+            '})',
+            'bot.on("stopped_message_generation", async (ctx) => {',
+            '    const stopped: MessageGenerationStopped = ctx.stoppedMessageGeneration',
+            '    const chat: Chat = ctx.chat',
+            '    await ctx.sendRichMessageDraft(stopped.draft_id, { markdown: "stopped" })',
+            '    void chat',
+            '})',
+            'bot.on("managed_bot", async (ctx) => {',
+            '    const update: ManagedBotUpdated = ctx.managedBot',
+            '    const creator: User = ctx.from',
+            '    const settings: BotAccessSettings = await ctx.telegram.getManagedBotAccessSettings({ user_id: update.bot.id })',
+            '    await ctx.telegram.setManagedBotAccessSettings({ user_id: update.bot.id, access_settings: { ...settings, allow_bot_to_bot_messages: true } })',
+            '    void creator',
+            '})',
+            'if (anyCtx.has("guest_message")) {',
+            '    const narrowed: Message = anyCtx.guestMessage',
+            '    void narrowed',
+            '}',
+            'type Exact<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false',
+            '// ctx.chat is typed from what the runtime actually derives',
+            'const guestChat: Exact<Context<Update.GuestQueryUpdate>["chat"], undefined> = true',
+            'const stoppedChat: Exact<Context<Update.StoppedMessageGenerationUpdate>["chat"], Chat> = true',
+            'const subscriptionFrom: Exact<Context<Update.BotSubscriptionUpdate>["from"], User> = true',
+            'const managedFrom: Exact<Context<Update.ManagedBotUpdate>["from"], User> = true',
+            'const guestFrom: Exact<Context<Update.GuestQueryUpdate>["from"], undefined> = true',
+            'const maybeGuest: Message | undefined = anyCtx.guestMessage',
+            'const maybeSubscription: BotSubscriptionUpdated | undefined = anyCtx.subscription',
+            '',
+            '// allowed_updates accept the new update types',
+            'void bot.launch({ allowedUpdates: ["guest_message", "subscription", "stopped_message_generation", "managed_bot"] })',
+            'void telegram.getUpdates(0, 100, 0, ["guest_message", "subscription"])',
+            '',
+            '// communities on chat info and service messages',
+            'async function communities() {',
+            '    const info: ChatFullInfo = await telegram.getChat(1)',
+            '    const community: Community | undefined = "community" in info ? info.community : undefined',
+            '    bot.on(message("community_chat_added"), (ctx) => {',
+            '        const added: Community = ctx.message.community_chat_added.community',
+            '        void added',
+            '    })',
+            '    void community',
+            '}',
+            '',
+            'const extra: Convenience.ExtraAnswerGuestQuery = { parse_mode: "HTML" }',
+            'void telegram.answerGuestQuery({ guest_query_id: "q", text: "hi", ...extra })',
+            '',
+            '// @ts-expect-error the update is called "subscription" in Bot API 10.3',
+            'bot.on("bot_subscription", () => {})',
+            '// @ts-expect-error guest_query_id is filled in by the Context helper',
+            'void anyCtx.answerGuestQuery("hi", { guest_query_id: "other" })',
+            '// @ts-expect-error access_settings is required',
+            'void telegram.setManagedBotAccessSettings({ user_id: 1 })',
+            '// @ts-expect-error unknown access setting',
+            'void telegram.setManagedBotAccessSettings({ user_id: 1, access_settings: { can_do_anything: true } })',
+            '// @ts-expect-error answerGuestQuery requires text',
+            'void telegram.answerGuestQuery({ guest_query_id: "q" })',
+            '// @ts-expect-error guest messages do not provide a chat on Context',
+            'bot.on("guest_message", (ctx) => ctx.chat.id)',
+            '',
+            'void [communities, maybeGuest, maybeSubscription, guestChat, stoppedChat, subscriptionFrom, managedFrom, guestFrom]',
+        ].join('\n')
+    )
+    t.pass()
+})
+
 test('Bot API 9.4-9.6 changelog fields are typed', (t) => {
     const files = {
         manage: readTypeFile('manage'),

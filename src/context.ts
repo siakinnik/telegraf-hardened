@@ -211,7 +211,7 @@ export class Context<U extends Deunionize<tg.Update> = tg.Update> {
         return getBizConnIdFromAnySource(this) as GetBizConnId<U>
     }
 
-    get chat(): Getter<U, 'chat'> {
+    get chat(): GetChat<U> {
         return (
             this.msg ??
             this.messageReaction ??
@@ -221,7 +221,7 @@ export class Context<U extends Deunionize<tg.Update> = tg.Update> {
             this.myChatMember ??
             this.removedChatBoost ??
             this.stoppedMessageGeneration
-        )?.chat as Getter<U, 'chat'>
+        )?.chat as GetChat<U>
     }
 
     get senderChat() {
@@ -1833,6 +1833,10 @@ type Getter<U extends Deunionize<tg.Update>, P extends string> = PropOr<
     GetUpdateContent<U>,
     P
 >
+
+/** Guest messages belong to another bot's chat, so `ctx.chat` is never derived from them */
+type GetChat<U extends Deunionize<tg.Update>> =
+    U extends tg.Update.GuestQueryUpdate ? undefined : Getter<U, 'chat'>
 
 interface Msg {
     isAccessible(
