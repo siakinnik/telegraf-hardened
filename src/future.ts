@@ -146,6 +146,8 @@ const replyContext: ReplyContext = {
         this.assert(this.chat, 'replyWithRichMessage')
         return this.telegram.sendRichMessage({
             chat_id: this.chat.id,
+            message_thread_id: this.message_thread_id,
+            business_connection_id: this.business_connection_id,
             ...makeReply(this, extra),
             rich_message: richMessage,
         })
