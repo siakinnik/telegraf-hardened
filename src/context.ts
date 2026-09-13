@@ -589,6 +589,52 @@ export class Context<U extends Deunionize<tg.Update> = tg.Update> {
     }
 
     /**
+     * @see https://core.telegram.org/bots/api#sendrichmessage
+     */
+    sendRichMessage(
+        richMessage: tg.InputRichMessage,
+        extra?: tt.ExtraRichMessage
+    ) {
+        this.assert(this.chat, 'sendRichMessage')
+        return this.telegram.sendRichMessage({
+            chat_id: this.chat.id,
+            message_thread_id: getThreadId(this),
+            business_connection_id: getBizConnIdFromAnySource(this),
+            ...extra,
+            rich_message: richMessage,
+        })
+    }
+
+    /**
+     * @see https://core.telegram.org/bots/api#sendrichmessage
+     */
+    replyWithRichMessage(
+        richMessage: tg.InputRichMessage,
+        extra?: tt.ExtraRichMessage
+    ) {
+        return this.sendRichMessage(richMessage, extra)
+    }
+
+    /**
+     * Streams a partial rich message to the current chat; changes of drafts with the same `draftId` are animated.
+     * @see https://core.telegram.org/bots/api#sendrichmessagedraft
+     */
+    sendRichMessageDraft(
+        draftId: number,
+        richMessage: tg.InputRichMessage,
+        extra?: tt.ExtraRichMessageDraft
+    ) {
+        this.assert(this.chat, 'sendRichMessageDraft')
+        return this.telegram.sendRichMessageDraft({
+            chat_id: this.chat.id,
+            message_thread_id: getThreadId(this),
+            ...extra,
+            draft_id: draftId,
+            rich_message: richMessage,
+        })
+    }
+
+    /**
      * @see https://core.telegram.org/bots/api#getchat
      */
     getChat(...args: Shorthand<'getChat'>) {

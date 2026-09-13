@@ -127,6 +127,11 @@ export type ExtraPhoto = MakeExtra<'sendPhoto', 'photo'>
 export type ExtraPoll = MakeExtra<'sendPoll', 'question' | 'options' | 'type'>
 export type ExtraPromoteChatMember = MakeExtra<'promoteChatMember', 'user_id'>
 export type ExtraReplyMessage = MakeExtra<'sendMessage', 'text'>
+export type ExtraRichMessage = MakeExtra<'sendRichMessage', 'rich_message'>
+export type ExtraRichMessageDraft = MakeExtra<
+    'sendRichMessageDraft',
+    'draft_id' | 'rich_message'
+>
 export type ExtraForwardMessage = MakeExtra<
     'forwardMessage',
     'from_chat_id' | 'message_id'

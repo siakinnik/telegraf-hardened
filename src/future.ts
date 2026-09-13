@@ -142,6 +142,14 @@ const replyContext: ReplyContext = {
             makeReply(this, extra)
         )
     },
+    replyWithRichMessage(this: Context, richMessage, extra) {
+        this.assert(this.chat, 'replyWithRichMessage')
+        return this.telegram.sendRichMessage({
+            chat_id: this.chat.id,
+            ...makeReply(this, extra),
+            rich_message: richMessage,
+        })
+    },
     replyWithQuiz(this: Context, question, options, extra) {
         this.assert(this.chat, 'replyWithQuiz')
         return this.telegram.sendQuiz(
@@ -221,6 +229,7 @@ export function useNewReplies<C extends Context>(): Middleware<C> {
         ctx.replyWithVoice = replyContext.replyWithVoice
         ctx.replyWithPoll = replyContext.replyWithPoll
         ctx.replyWithQuiz = replyContext.replyWithQuiz
+        ctx.replyWithRichMessage = replyContext.replyWithRichMessage
         ctx.replyWithChatAction = replyContext.replyWithChatAction
         ctx.replyWithLocation = replyContext.replyWithLocation
         ctx.replyWithVenue = replyContext.replyWithVenue

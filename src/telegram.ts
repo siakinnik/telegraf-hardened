@@ -2010,10 +2010,20 @@ export class Telegram extends ApiClient {
         return this.callApi('editUserStarSubscription', args)
     }
 
+    /**
+     * Send a rich message combining formatted text, tables, media collages, buttons, and file attachments.
+     * Content goes in `rich_message` as `blocks`, `html` or `markdown`; media referenced from it is listed in `rich_message.media`.
+     * @see https://core.telegram.org/bots/api#sendrichmessage
+     */
     sendRichMessage(args: tg.Opts<'sendRichMessage'>) {
         return this.callApi('sendRichMessage', args)
     }
 
+    /**
+     * Stream a partial rich message to a user while it is being generated.
+     * Supported only in private chats of bots with forum topic mode enabled. Changes of drafts with the same `draft_id` are animated.
+     * @see https://core.telegram.org/bots/api#sendrichmessagedraft
+     */
     sendRichMessageDraft(args: tg.Opts<'sendRichMessageDraft'>) {
         return this.callApi('sendRichMessageDraft', args)
     }
