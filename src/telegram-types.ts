@@ -10,6 +10,7 @@ import {
     InputMediaDocument,
     InputMediaPhoto,
     InputMediaVideo,
+    InputPollOption,
     InputRichMessage,
 } from './core/types/typegram'
 
@@ -147,6 +148,9 @@ export type ExtraKickChatMember = ExtraBanChatMember
 export type ExtraLocation = MakeExtra<'sendLocation', 'latitude' | 'longitude'>
 export type ExtraMediaGroup = MakeExtra<'sendMediaGroup', 'media'>
 export type ExtraPhoto = MakeExtra<'sendPhoto', 'photo'>
+export type ExtraLivePhoto = MakeExtra<'sendLivePhoto', 'photo' | 'video'>
+/** A poll answer option: its text, or a full `InputPollOption` with formatting and media */
+export type PollOption = string | InputPollOption
 export type ExtraPoll = MakeExtra<'sendPoll', 'question' | 'options' | 'type'>
 export type ExtraPromoteChatMember = MakeExtra<'promoteChatMember', 'user_id'>
 export type ExtraReplyMessage = MakeExtra<'sendMessage', 'text'>

@@ -20,6 +20,22 @@ function makeReply<
     else return extra
 }
 
+/** Topic thread and business connection of the current update, for args-style send methods */
+function replyTarget(ctx: Context) {
+    const msg = ctx.msg
+    return {
+        message_thread_id:
+            msg && 'message_thread_id' in msg && msg.is_topic_message
+                ? msg.message_thread_id
+                : undefined,
+        business_connection_id:
+            ctx.businessConnection?.id ??
+            ctx.businessMessage?.business_connection_id ??
+            ctx.editedBusinessMessage?.business_connection_id ??
+            ctx.deletedBusinessMessages?.business_connection_id,
+    }
+}
+
 const replyContext: ReplyContext = {
     replyWithChatAction: function () {
         throw new TypeError(
@@ -144,23 +160,21 @@ const replyContext: ReplyContext = {
     },
     replyWithRichMessage(this: Context, richMessage, extra) {
         this.assert(this.chat, 'replyWithRichMessage')
-        const message_thread_id =
-            this.msg &&
-            'message_thread_id' in this.msg &&
-            this.msg.is_topic_message
-                ? this.msg.message_thread_id
-                : undefined
-        const business_connection_id =
-            this.businessConnection?.id ??
-            this.businessMessage?.business_connection_id ??
-            this.editedBusinessMessage?.business_connection_id ??
-            this.deletedBusinessMessages?.business_connection_id
         return this.telegram.sendRichMessage({
             chat_id: this.chat.id,
-            message_thread_id,
-            business_connection_id,
+            ...replyTarget(this),
             ...makeReply(this, extra),
             rich_message: richMessage,
+        })
+    },
+    replyWithLivePhoto(this: Context, photo, video, extra) {
+        this.assert(this.chat, 'replyWithLivePhoto')
+        return this.telegram.sendLivePhoto({
+            chat_id: this.chat.id,
+            ...replyTarget(this),
+            ...makeReply(this, extra),
+            photo,
+            video,
         })
     },
     replyWithQuiz(this: Context, question, options, extra) {
@@ -229,6 +243,7 @@ export function useNewReplies<C extends Context>(): Middleware<C> {
     return (ctx, next) => {
         ctx.reply = replyContext.reply
         ctx.replyWithPhoto = replyContext.replyWithPhoto
+        ctx.replyWithLivePhoto = replyContext.replyWithLivePhoto
         ctx.replyWithMediaGroup = replyContext.replyWithMediaGroup
         ctx.replyWithAudio = replyContext.replyWithAudio
         ctx.replyWithDice = replyContext.replyWithDice

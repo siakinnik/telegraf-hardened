@@ -484,19 +484,19 @@ export class Telegram extends ApiClient {
      * Send a native poll.
      * @param chatId Unique identifier for the target chat or username of the target channel (in the format @channelusername)
      * @param question Poll question, 1-255 characters
-     * @param options A JSON-serialized list of answer options, 2-10 strings 1-100 characters each
+     * @param options Answer options: plain texts, or `InputPollOption` objects to add formatting or `media`
      */
     sendPoll(
         chatId: number | string,
         question: string,
-        options: readonly string[],
+        options: readonly tt.PollOption[],
         extra?: tt.ExtraPoll
     ) {
         return this.callApi('sendPoll', {
             chat_id: chatId,
             type: 'regular',
             question,
-            options: options.map((text) => ({ text })),
+            options: options.map(toInputPollOption),
             ...extra,
         })
     }
@@ -505,19 +505,19 @@ export class Telegram extends ApiClient {
      * Send a native quiz.
      * @param chatId Unique identifier for the target chat or username of the target channel (in the format @channelusername)
      * @param question Poll question, 1-255 characters
-     * @param options A JSON-serialized list of answer options, 2-10 strings 1-100 characters each
+     * @param options Answer options: plain texts, or `InputPollOption` objects to add formatting or `media`
      */
     sendQuiz(
         chatId: number | string,
         question: string,
-        options: readonly string[],
+        options: readonly tt.PollOption[],
         extra?: tt.ExtraPoll
     ) {
         return this.callApi('sendPoll', {
             chat_id: chatId,
             type: 'quiz',
             question,
-            options: options.map((text) => ({ text })),
+            options: options.map(toInputPollOption),
             ...extra,
         })
     }
@@ -2034,22 +2034,44 @@ export class Telegram extends ApiClient {
         return this.callApi('sendRichMessageDraft', args)
     }
 
-    sendLivePhoto(args: tg.Opts<'sendLivePhoto'>) {
-        return this.callApi('sendLivePhoto', args)
+    /**
+     * Send a live photo: a still `photo` with the short `video` clip that accompanies it.
+     * The video can only be uploaded as a new file. `caption` may be a `FmtString`.
+     * @see https://core.telegram.org/bots/api#sendlivephoto
+     */
+    sendLivePhoto(args: tt.WrapCaption<tg.Opts<'sendLivePhoto'>>) {
+        return this.callApi('sendLivePhoto', fmtCaption(args))
     }
 
+    /**
+     * Remove a specific reaction of the bot from a message.
+     * @see https://core.telegram.org/bots/api#deletemessagereaction
+     */
     deleteMessageReaction(args: tg.Opts<'deleteMessageReaction'>) {
         return this.callApi('deleteMessageReaction', args)
     }
 
+    /**
+     * Remove all reactions set by the bot from a message.
+     * @see https://core.telegram.org/bots/api#deleteallmessagereactions
+     */
     deleteAllMessageReactions(args: tg.Opts<'deleteAllMessageReactions'>) {
         return this.callApi('deleteAllMessageReactions', args)
     }
 
+    /**
+     * Answer a join request query, the `query_id` of a `chat_join_request` update.
+     * Requires the can_invite_users administrator right in the chat.
+     * @see https://core.telegram.org/bots/api#answerchatjoinrequestquery
+     */
     answerChatJoinRequestQuery(args: tg.Opts<'answerChatJoinRequestQuery'>) {
         return this.callApi('answerChatJoinRequestQuery', args)
     }
 
+    /**
+     * Send a Web App the bot can use to review a join request query.
+     * @see https://core.telegram.org/bots/api#sendchatjoinrequestwebapp
+     */
     sendChatJoinRequestWebApp(args: tg.Opts<'sendChatJoinRequestWebApp'>) {
         return this.callApi('sendChatJoinRequestWebApp', args)
     }
@@ -2099,6 +2121,10 @@ export class Telegram extends ApiClient {
 }
 
 export default Telegram
+
+function toInputPollOption(option: tt.PollOption): tg.InputPollOption {
+    return typeof option === 'string' ? { text: option } : option
+}
 
 /** Content fields of a text edit: `text` (with its entities) or `rich_message`, never both */
 function textOrRichMessage(

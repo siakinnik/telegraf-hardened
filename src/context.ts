@@ -901,6 +901,38 @@ export class Context<U extends Deunionize<tg.Update> = tg.Update> {
     }
 
     /**
+     * @param photo The still photo of the live photo
+     * @param video The short video clip that accompanies the photo; can only be uploaded as a new file
+     * @see https://core.telegram.org/bots/api#sendlivephoto
+     */
+    sendLivePhoto(
+        photo: string | tg.InputFile,
+        video: tg.InputFile,
+        extra?: tt.ExtraLivePhoto
+    ) {
+        this.assert(this.chat, 'sendLivePhoto')
+        return this.telegram.sendLivePhoto({
+            chat_id: this.chat.id,
+            message_thread_id: getThreadId(this),
+            business_connection_id: getBizConnIdFromAnySource(this),
+            ...extra,
+            photo,
+            video,
+        })
+    }
+
+    /**
+     * @see https://core.telegram.org/bots/api#sendlivephoto
+     */
+    replyWithLivePhoto(
+        photo: string | tg.InputFile,
+        video: tg.InputFile,
+        extra?: tt.ExtraLivePhoto
+    ) {
+        return this.sendLivePhoto(photo, video, extra)
+    }
+
+    /**
      * @see https://core.telegram.org/bots/api#sendmediagroup
      */
     sendMediaGroup(media: tt.MediaGroup, extra?: tt.ExtraMediaGroup) {
@@ -1114,7 +1146,11 @@ export class Context<U extends Deunionize<tg.Update> = tg.Update> {
     /**
      * @see https://core.telegram.org/bots/api#sendpoll
      */
-    sendPoll(poll: string, options: readonly string[], extra?: tt.ExtraPoll) {
+    sendPoll(
+        poll: string,
+        options: readonly tt.PollOption[],
+        extra?: tt.ExtraPoll
+    ) {
         this.assert(this.chat, 'sendPoll')
         return this.telegram.sendPoll(this.chat.id, poll, options, {
             message_thread_id: getThreadId(this),
@@ -1133,7 +1169,11 @@ export class Context<U extends Deunionize<tg.Update> = tg.Update> {
     /**
      * @see https://core.telegram.org/bots/api#sendpoll
      */
-    sendQuiz(quiz: string, options: readonly string[], extra?: tt.ExtraPoll) {
+    sendQuiz(
+        quiz: string,
+        options: readonly tt.PollOption[],
+        extra?: tt.ExtraPoll
+    ) {
         this.assert(this.chat, 'sendQuiz')
         return this.telegram.sendQuiz(this.chat.id, quiz, options, {
             message_thread_id: getThreadId(this),
@@ -1223,12 +1263,7 @@ export class Context<U extends Deunionize<tg.Update> = tg.Update> {
      * @param reaction An emoji or custom_emoji_id to set as reaction to current message. Leave empty to remove reactions.
      * @param is_big Pass True to set the reaction with a big animation
      */
-    react(
-        reaction?: MaybeArray<
-            tg.TelegramEmoji | `${Digit}${string}` | tg.ReactionType
-        >,
-        is_big?: boolean
-    ) {
+    react(reaction?: MaybeArray<ReactionInput>, is_big?: boolean) {
         this.assert(this.chat, 'setMessageReaction')
         this.assert(this.msgId, 'setMessageReaction')
         const emojis = reaction
@@ -1236,14 +1271,7 @@ export class Context<U extends Deunionize<tg.Update> = tg.Update> {
                 ? reaction
                 : [reaction]
             : undefined
-        const reactions = emojis?.map(
-            (emoji): tg.ReactionType =>
-                typeof emoji === 'string'
-                    ? Digit.has(emoji[0] as string)
-                        ? { type: 'custom_emoji', custom_emoji_id: emoji }
-                        : { type: 'emoji', emoji: emoji as tg.TelegramEmoji }
-                    : emoji
-        )
+        const reactions = emojis?.map(toReactionType)
         return this.telegram.setMessageReaction(
             this.chat.id,
             this.msgId,
@@ -1673,6 +1701,36 @@ export class Context<U extends Deunionize<tg.Update> = tg.Update> {
     }
 
     /**
+     * Removes one of the bot's reactions from the current message, or from the message with `messageId`.
+     * @param reaction An emoji, a custom_emoji_id, or a ReactionType, as accepted by {@link Context.react}
+     * @see https://core.telegram.org/bots/api#deletemessagereaction
+     */
+    deleteMessageReaction(reaction: ReactionInput, messageId?: number) {
+        this.assert(this.chat, 'deleteMessageReaction')
+        const message_id = messageId ?? this.msgId
+        this.assert(message_id, 'deleteMessageReaction')
+        return this.telegram.deleteMessageReaction({
+            chat_id: this.chat.id,
+            message_id,
+            reaction: toReactionType(reaction),
+        })
+    }
+
+    /**
+     * Removes all reactions set by the bot from the current message, or from the message with `messageId`.
+     * @see https://core.telegram.org/bots/api#deleteallmessagereactions
+     */
+    deleteAllMessageReactions(messageId?: number) {
+        this.assert(this.chat, 'deleteAllMessageReactions')
+        const message_id = messageId ?? this.msgId
+        this.assert(message_id, 'deleteAllMessageReactions')
+        return this.telegram.deleteAllMessageReactions({
+            chat_id: this.chat.id,
+            message_id,
+        })
+    }
+
+    /**
      * @see https://core.telegram.org/bots/api#forwardmessage
      */
     forwardMessage(
@@ -1754,6 +1812,32 @@ export class Context<U extends Deunionize<tg.Update> = tg.Update> {
     declineChatJoinRequest(userId: number) {
         this.assert(this.chat, 'declineChatJoinRequest')
         return this.telegram.declineChatJoinRequest(this.chat.id, userId)
+    }
+
+    /**
+     * Answers the join request query of the `chat_join_request` update.
+     * @see https://core.telegram.org/bots/api#answerchatjoinrequestquery
+     */
+    answerChatJoinRequestQuery(approve: boolean) {
+        const queryId = this.chatJoinRequest?.query_id
+        this.assert(queryId, 'answerChatJoinRequestQuery')
+        return this.telegram.answerChatJoinRequestQuery({
+            query_id: queryId,
+            approve,
+        })
+    }
+
+    /**
+     * Sends a Web App to review the join request query of the `chat_join_request` update.
+     * @see https://core.telegram.org/bots/api#sendchatjoinrequestwebapp
+     */
+    sendChatJoinRequestWebApp(webApp: tg.WebAppInfo) {
+        const queryId = this.chatJoinRequest?.query_id
+        this.assert(queryId, 'sendChatJoinRequestWebApp')
+        return this.telegram.sendChatJoinRequestWebApp({
+            query_id: queryId,
+            web_app: webApp,
+        })
     }
 
     /**
@@ -2006,6 +2090,16 @@ function getTextAndEntitiesFromAnySource<U extends tg.Update>(ctx: Context<U>) {
             (entities = ctx.poll.explanation_entities)
 
     return [text, entities] as const
+}
+
+/** An emoji, a custom_emoji_id (starts with a digit) or a ReactionType */
+type ReactionInput = tg.TelegramEmoji | `${Digit}${string}` | tg.ReactionType
+
+function toReactionType(reaction: ReactionInput): tg.ReactionType {
+    if (typeof reaction !== 'string') return reaction
+    return Digit.has(reaction[0] as string)
+        ? { type: 'custom_emoji', custom_emoji_id: reaction }
+        : { type: 'emoji', emoji: reaction as tg.TelegramEmoji }
 }
 
 const getThreadId = <U extends tg.Update>(ctx: Context<U>) => {
