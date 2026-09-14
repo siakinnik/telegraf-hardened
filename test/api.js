@@ -1,5 +1,5 @@
 const http = require('http')
-const { execFileSync } = require('child_process')
+const { execFile } = require('child_process')
 const os = require('os')
 const fs = require('fs')
 const path = require('path')
@@ -94,33 +94,35 @@ function hasTypeMember(source, name, member) {
 // Package root as a TypeScript import specifier; forward slashes keep Windows paths valid in string literals
 const packageRoot = process.cwd().split(path.sep).join('/')
 
-function compileTypeScript(name, source) {
+const execFileAsync = util.promisify(execFile)
+
+// Asynchronous on purpose: a blocking tsc run stalls the AVA worker, and several of them
+// back to back exceed AVA's inactivity timeout for every other test in this file
+async function compileTypeScript(name, source) {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'telegraf-types-'))
     const file = path.join(dir, name)
     fs.writeFileSync(file, source)
     try {
         // run tsc through node: the extensionless .bin shim cannot be spawned on Windows
-        execFileSync(
-            process.execPath,
-            [
-                require.resolve('typescript/bin/tsc'),
-                '--noEmit',
-                '--strict',
-                '--module',
-                'node16',
-                '--moduleResolution',
-                'node16',
-                '--target',
-                'es2022',
-                '--skipLibCheck',
-                file,
-            ],
-            { stdio: 'pipe' }
-        )
+        await execFileAsync(process.execPath, [
+            require.resolve('typescript/bin/tsc'),
+            '--noEmit',
+            '--strict',
+            '--module',
+            'node16',
+            '--moduleResolution',
+            'node16',
+            '--target',
+            'es2022',
+            '--skipLibCheck',
+            file,
+        ])
     } catch (err) {
-        // surface compiler diagnostics instead of an opaque Buffer
+        // surface compiler diagnostics
         if (err.stdout) err.message += `\n${err.stdout}`
         throw err
+    } finally {
+        fs.rmSync(dir, { recursive: true, force: true })
     }
 }
 
@@ -939,13 +941,19 @@ const telegramEphemeralSendCalls = {
     sendVoice: (tg, extra) => tg.sendVoice(42, 'voice-id', extra),
 }
 
-// Context helpers for the same methods; Bot API 10.x methods without a Context helper are listed explicitly
+// Context helpers for the same methods; every one of them must have a Context helper
 const contextEphemeralSendCalls = {
     sendAnimation: (ctx, extra) =>
         ctx.replyWithAnimation('animation-id', extra),
     sendAudio: (ctx, extra) => ctx.replyWithAudio('audio-id', extra),
     sendContact: (ctx, extra) => ctx.replyWithContact('+100', 'Name', extra),
     sendDocument: (ctx, extra) => ctx.replyWithDocument('document-id', extra),
+    sendLivePhoto: (ctx, extra) =>
+        ctx.replyWithLivePhoto(
+            'photo-id',
+            Input.fromBuffer(Buffer.from('clip'), 'clip.mp4'),
+            extra
+        ),
     sendLocation: (ctx, extra) => ctx.replyWithLocation(1, 2, extra),
     sendMessage: (ctx, extra) => ctx.reply('text', extra),
     sendPhoto: (ctx, extra) => ctx.replyWithPhoto('photo-id', extra),
@@ -958,7 +966,6 @@ const contextEphemeralSendCalls = {
     sendVideoNote: (ctx, extra) => ctx.replyWithVideoNote('note-id', extra),
     sendVoice: (ctx, extra) => ctx.replyWithVoice('voice-id', extra),
 }
-const EPHEMERAL_SEND_METHODS_WITHOUT_CONTEXT_HELPER = ['sendLivePhoto']
 
 test('Bot API 10.3 ephemeral message fields are typed', (t) => {
     const files = {
@@ -1053,13 +1060,7 @@ test('ephemeral_message_parameters coverage matches the Bot API types', (t) => {
 
     // fails when the types add or drop ephemeral support on a method
     t.deepEqual(Object.keys(telegramEphemeralSendCalls).sort(), typed)
-    t.deepEqual(
-        Object.keys(contextEphemeralSendCalls).sort(),
-        typed.filter(
-            (method) =>
-                !EPHEMERAL_SEND_METHODS_WITHOUT_CONTEXT_HELPER.includes(method)
-        )
-    )
+    t.deepEqual(Object.keys(contextEphemeralSendCalls).sort(), typed)
     // methods that must never gain the parameter by accident
     for (const method of [
         'sendMediaGroup',
@@ -1251,8 +1252,8 @@ test('pre-10.3 message methods keep their payloads', async (t) => {
     }
 })
 
-test('ephemeral message APIs are typed for Telegram and Context', (t) => {
-    compileTypeScript(
+test('ephemeral message APIs are typed for Telegram and Context', async (t) => {
+    await compileTypeScript(
         'ephemeral-types.ts',
         [
             `import { Context, Telegram } from '${packageRoot}'`,
@@ -2485,8 +2486,8 @@ test('rich_message coverage matches the Bot API types', async (t) => {
     t.deepEqual([...reached].sort(), typed)
 })
 
-test('rich message APIs are typed for Telegram and Context', (t) => {
-    compileTypeScript(
+test('rich message APIs are typed for Telegram and Context', async (t) => {
+    await compileTypeScript(
         'rich-message-types.ts',
         [
             `import { Context, Input, Telegram } from '${packageRoot}'`,
@@ -3205,8 +3206,8 @@ test('Bot API 10.3 guest mode, subscription and managed bot fields are typed', (
     t.deepEqual(missing, [])
 })
 
-test('guest mode, subscription and managed bot APIs are typed', (t) => {
-    compileTypeScript(
+test('guest mode, subscription and managed bot APIs are typed', async (t) => {
+    await compileTypeScript(
         'guest-mode-types.ts',
         [
             `import { Context, Telegraf, Telegram } from '${packageRoot}'`,
@@ -3288,6 +3289,1012 @@ test('guest mode, subscription and managed bot APIs are typed', (t) => {
             'bot.on("guest_message", (ctx) => ctx.chat.id)',
             '',
             'void [communities, maybeGuest, maybeSubscription, guestChat, stoppedChat, subscriptionFrom, managedFrom, guestFrom]',
+        ].join('\n')
+    )
+    t.pass()
+})
+
+// Bot API 10.3: live photos, poll media, reaction removal and join request queries
+
+const clipFile = () => Input.fromBuffer(Buffer.from('clip-bytes'), 'clip.mp4')
+const reactionUpdate = {
+    update_id: 40,
+    message_reaction: {
+        chat: privateChat,
+        message_id: 7,
+        user: ephemeralUser,
+        date: 1,
+        old_reaction: [],
+        new_reaction: [{ type: 'emoji', emoji: '👍' }],
+    },
+}
+const joinRequestQueryUpdate = {
+    update_id: 41,
+    chat_join_request: {
+        chat: groupChat,
+        from: ephemeralUser,
+        user_chat_id: 99,
+        date: 1,
+        query_id: 'jrq-1',
+    },
+}
+const catOption = {
+    text: 'Cat',
+    text_entities: [],
+    media: { type: 'photo', media: 'cat-file-id' },
+}
+
+test('Telegram.sendLivePhoto passes arguments through and formats captions', async (t) => {
+    const { bold } = require('../format')
+    const sent = { message_id: 1, live_photo: {} }
+    const { telegram, calls } = recordingTelegram(sent)
+    const clip = clipFile()
+    const plain = {
+        chat_id: 42,
+        photo: 'photo-id',
+        video: clip,
+        caption: 'plain',
+        parse_mode: 'HTML',
+        show_caption_above_media: true,
+        ephemeral_message_parameters: ephemeralParams,
+    }
+    const noCaption = { chat_id: '@channel', photo: clip, video: clip }
+
+    t.is(await telegram.sendLivePhoto(plain), sent)
+    await telegram.sendLivePhoto(noCaption)
+    await telegram.sendLivePhoto({
+        chat_id: 42,
+        photo: 'photo-id',
+        video: clip,
+        caption: bold('formatted'),
+        parse_mode: 'HTML',
+    })
+
+    t.deepEqual(calls, [
+        ['sendLivePhoto', plain],
+        ['sendLivePhoto', noCaption],
+        [
+            'sendLivePhoto',
+            {
+                chat_id: 42,
+                photo: 'photo-id',
+                video: clip,
+                caption: 'formatted',
+                caption_entities: boldEntities(9),
+                // entities from FmtString win over a parse_mode passed alongside
+                parse_mode: undefined,
+            },
+        ],
+    ])
+    // arguments without a FmtString caption are forwarded as-is
+    t.is(calls[0][1], plain)
+    t.is(calls[1][1], noCaption)
+    t.is(calls[2][1].video, clip)
+})
+
+test('live photo and voice note uploads are sent as multipart attachments', async (t) => {
+    const { bold } = require('../format')
+
+    const live = await captureBotApiRequest((telegram) =>
+        telegram.sendLivePhoto({
+            chat_id: 42,
+            photo: Input.fromBuffer(Buffer.from('still-bytes'), 'still.jpg'),
+            video: clipFile(),
+            caption: bold('live'),
+        })
+    )
+    t.true(live.result)
+    t.is(live.url, '/bot123:abc/sendLivePhoto')
+    t.regex(live.headers['content-type'], /^multipart\/form-data/)
+    t.is(getMultipartField(live.body, 'chat_id'), '42')
+    t.is(getMultipartField(live.body, 'caption'), 'live')
+    t.deepEqual(
+        JSON.parse(getMultipartField(live.body, 'caption_entities')),
+        boldEntities(4)
+    )
+    for (const [field, filename, bytes] of [
+        ['photo', 'still.jpg', 'still-bytes'],
+        ['video', 'clip.mp4', 'clip-bytes'],
+    ]) {
+        t.true(
+            live.body.includes(`name="${field}"; filename="${filename}"`),
+            field
+        )
+        t.true(live.body.includes(bytes), field)
+    }
+
+    const paid = await captureBotApiRequest((telegram) =>
+        telegram.sendPaidMedia(
+            42,
+            [
+                {
+                    type: 'live_photo',
+                    media: Input.fromBuffer(
+                        Buffer.from('paid-still'),
+                        'paid.jpg'
+                    ),
+                    video: Input.fromBuffer(
+                        Buffer.from('paid-motion'),
+                        'paid.mp4'
+                    ),
+                },
+                { type: 'photo', media: 'photo-id' },
+            ],
+            25
+        )
+    )
+    t.is(paid.url, '/bot123:abc/sendPaidMedia')
+    const paidMedia = JSON.parse(getMultipartField(paid.body, 'media'))
+    t.is(paidMedia.length, 2)
+    t.is(paidMedia[0].type, 'live_photo')
+    const stillId = /^attach:\/\/([0-9a-f]+)$/.exec(paidMedia[0].media)
+    const motionId = /^attach:\/\/([0-9a-f]+)$/.exec(paidMedia[0].video)
+    t.truthy(stillId)
+    t.truthy(motionId)
+    t.not(stillId[1], motionId[1])
+    t.true(paid.body.includes(`name="${stillId[1]}"; filename="paid.jpg"`))
+    t.true(paid.body.includes(`name="${motionId[1]}"; filename="paid.mp4"`))
+    t.deepEqual(paidMedia[1], { type: 'photo', media: 'photo-id' })
+    t.is(getMultipartField(paid.body, 'star_count'), '25')
+
+    const voice = await captureBotApiRequest((telegram) =>
+        telegram.editMessageMedia(42, 12, undefined, {
+            type: 'voice_note',
+            media: Input.fromBuffer(Buffer.from('ogg-bytes'), 'voice.ogg'),
+            caption: bold('voice'),
+        })
+    )
+    t.is(voice.url, '/bot123:abc/editMessageMedia')
+    const voiceMedia = JSON.parse(getMultipartField(voice.body, 'media'))
+    t.is(voiceMedia.type, 'voice_note')
+    t.regex(voiceMedia.media, /^attach:\/\/[0-9a-f]+$/)
+    t.is(voiceMedia.caption, 'voice')
+    t.deepEqual(voiceMedia.caption_entities, boldEntities(5))
+    t.true(voice.body.includes('ogg-bytes'))
+
+    const ephemeral = await captureBotApiRequest((telegram) =>
+        telegram.editEphemeralMessageMedia(42, 'eph-1', {
+            type: 'live_photo',
+            media: 'photo-id',
+            video: clipFile(),
+        })
+    )
+    const ephemeralMedia = JSON.parse(
+        getMultipartField(ephemeral.body, 'media')
+    )
+    t.is(ephemeralMedia.media, 'photo-id')
+    t.regex(ephemeralMedia.video, /^attach:\/\/[0-9a-f]+$/)
+    t.true(ephemeral.body.includes('clip-bytes'))
+})
+
+test('Context live photo helpers inherit chat, thread and business connection', async (t) => {
+    const cases = [
+        [
+            'plain message',
+            plainMessageUpdate,
+            {
+                chat_id: 42,
+                message_thread_id: undefined,
+                business_connection_id: undefined,
+            },
+        ],
+        [
+            'topic message',
+            topicMessageUpdate,
+            {
+                chat_id: 42,
+                message_thread_id: 9,
+                business_connection_id: undefined,
+            },
+        ],
+        [
+            'business message',
+            businessMessageUpdate,
+            {
+                chat_id: 42,
+                message_thread_id: undefined,
+                business_connection_id: 'biz-1',
+            },
+        ],
+        [
+            'callback query',
+            callbackUpdate(ephemeralMessage),
+            {
+                chat_id: 42,
+                message_thread_id: undefined,
+                business_connection_id: undefined,
+            },
+        ],
+    ]
+
+    for (const [name, update, defaults] of cases) {
+        const { telegram, calls } = recordingTelegram()
+        const ctx = new Context(update, telegram, botInfo)
+        const clip = clipFile()
+
+        await ctx.sendLivePhoto('photo-id', clip)
+        await ctx.replyWithLivePhoto('photo-id', clip, {
+            protect_content: true,
+        })
+
+        t.deepEqual(
+            calls,
+            [
+                [
+                    'sendLivePhoto',
+                    { ...defaults, photo: 'photo-id', video: clip },
+                ],
+                [
+                    'sendLivePhoto',
+                    {
+                        ...defaults,
+                        protect_content: true,
+                        photo: 'photo-id',
+                        video: clip,
+                    },
+                ],
+            ],
+            name
+        )
+    }
+})
+
+test('Context live photo extras override defaults but not the files', async (t) => {
+    const { bold } = require('../format')
+    const { telegram, calls } = recordingTelegram()
+    const ctx = new Context(topicMessageUpdate, telegram, botInfo)
+    const clip = clipFile()
+
+    await ctx.replyWithLivePhoto('photo-id', clip, {
+        message_thread_id: 10,
+        business_connection_id: 'biz-override',
+        caption: bold('caption'),
+        reply_markup: inlineMarkup,
+        ephemeral_message_parameters: ephemeralParams,
+        // not allowed by the types; positional files must still win for JS callers
+        photo: 'ignored-photo',
+        video: 'ignored-video',
+    })
+
+    t.deepEqual(calls, [
+        [
+            'sendLivePhoto',
+            {
+                chat_id: 42,
+                message_thread_id: 10,
+                business_connection_id: 'biz-override',
+                caption: 'caption',
+                caption_entities: boldEntities(7),
+                parse_mode: undefined,
+                reply_markup: inlineMarkup,
+                ephemeral_message_parameters: ephemeralParams,
+                photo: 'photo-id',
+                video: clip,
+            },
+        ],
+    ])
+})
+
+test('useNewReplies makes replyWithLivePhoto reply to the incoming message', async (t) => {
+    const cases = [
+        ['plain message', plainMessageUpdate, 13],
+        ['topic message', topicMessageUpdate, 5],
+        ['business message', businessMessageUpdate, 6],
+        ['callback query', callbackUpdate(ephemeralMessage), 12],
+    ]
+    for (const [name, update, messageId] of cases) {
+        const { telegram, calls } = recordingTelegram()
+        const ctx = new Context(update, telegram, botInfo)
+        const clip = clipFile()
+
+        await ctx.sendLivePhoto('photo-id', clip)
+        await withNewReplies(ctx, (replyCtx) =>
+            replyCtx.replyWithLivePhoto('photo-id', clip)
+        )
+
+        const [[, plain], [method, reply]] = calls
+        t.is(method, 'sendLivePhoto', name)
+        t.deepEqual(
+            reply,
+            { ...plain, reply_parameters: { message_id: messageId } },
+            name
+        )
+    }
+
+    const { telegram, calls } = recordingTelegram()
+    const clip = clipFile()
+    await withNewReplies(
+        new Context(topicMessageUpdate, telegram, botInfo),
+        (ctx) =>
+            ctx.replyWithLivePhoto('photo-id', clip, {
+                reply_parameters: { message_id: 3, quote: 'question' },
+                message_thread_id: 10,
+            })
+    )
+    // nothing to reply to: sends a normal live photo
+    await withNewReplies(
+        new Context(chatJoinRequestUpdate, telegram, botInfo),
+        (ctx) => ctx.replyWithLivePhoto('photo-id', clip)
+    )
+    t.deepEqual(calls, [
+        [
+            'sendLivePhoto',
+            {
+                chat_id: 42,
+                message_thread_id: 10,
+                business_connection_id: undefined,
+                reply_parameters: { message_id: 3, quote: 'question' },
+                photo: 'photo-id',
+                video: clip,
+            },
+        ],
+        [
+            'sendLivePhoto',
+            {
+                chat_id: -100,
+                message_thread_id: undefined,
+                business_connection_id: undefined,
+                photo: 'photo-id',
+                video: clip,
+            },
+        ],
+    ])
+})
+
+test('Telegram reaction removal and join request wrappers pass arguments through', async (t) => {
+    const results = {
+        deleteMessageReaction: true,
+        deleteAllMessageReactions: true,
+        answerChatJoinRequestQuery: true,
+        sendChatJoinRequestWebApp: { inline_message_id: 'inline-1' },
+    }
+    const calls = []
+    const telegram = new Telegram('token')
+    telegram.callApi = (method, payload) => {
+        calls.push([method, payload])
+        return results[method]
+    }
+    const args = {
+        deleteMessageReaction: {
+            chat_id: 42,
+            message_id: 7,
+            reaction: {
+                type: 'custom_emoji',
+                custom_emoji_id: '5368324170671202286',
+            },
+        },
+        deleteAllMessageReactions: { chat_id: '@channel', message_id: 7 },
+        answerChatJoinRequestQuery: { query_id: 'jrq-1', approve: true },
+        sendChatJoinRequestWebApp: {
+            query_id: 'jrq-1',
+            web_app: { url: 'https://example.test/review' },
+        },
+    }
+
+    for (const [method, payload] of Object.entries(args)) {
+        t.is(await telegram[method](payload), results[method], method)
+    }
+    t.deepEqual(calls, Object.entries(args))
+    for (const [index, payload] of Object.values(args).entries()) {
+        t.is(calls[index][1], payload)
+    }
+})
+
+test('Context.deleteMessageReaction converts reactions like react does', async (t) => {
+    const { telegram, calls } = recordingTelegram()
+    const ctx = new Context(plainMessageUpdate, telegram, botInfo)
+    const paid = { type: 'paid' }
+    const cases = [
+        ['👍', { type: 'emoji', emoji: '👍' }],
+        [
+            '5368324170671202286',
+            { type: 'custom_emoji', custom_emoji_id: '5368324170671202286' },
+        ],
+        [
+            { type: 'emoji', emoji: '🔥' },
+            { type: 'emoji', emoji: '🔥' },
+        ],
+        [paid, paid],
+    ]
+
+    for (const [input] of cases) {
+        await ctx.deleteMessageReaction(input)
+    }
+    await ctx.react(cases.map(([input]) => input))
+
+    t.deepEqual(calls, [
+        ...cases.map(([, reaction]) => [
+            'deleteMessageReaction',
+            { chat_id: 42, message_id: 13, reaction },
+        ]),
+        [
+            'setMessageReaction',
+            {
+                chat_id: 42,
+                message_id: 13,
+                reaction: cases.map(([, reaction]) => reaction),
+                is_big: undefined,
+            },
+        ],
+    ])
+    // ReactionType objects are forwarded as-is
+    t.is(calls[3][1].reaction, paid)
+})
+
+test('Context reaction removal targets the current or given message', async (t) => {
+    const { telegram, calls } = recordingTelegram()
+    const fromReaction = new Context(reactionUpdate, telegram, botInfo)
+    const fromCallback = new Context(
+        callbackUpdate(ephemeralMessage),
+        telegram,
+        botInfo
+    )
+    const fromJoinRequest = new Context(
+        chatJoinRequestUpdate,
+        telegram,
+        botInfo
+    )
+
+    await fromReaction.deleteMessageReaction('👍')
+    await fromReaction.deleteAllMessageReactions()
+    await fromCallback.deleteAllMessageReactions()
+    await fromCallback.deleteMessageReaction('🔥', 99)
+    await fromCallback.deleteAllMessageReactions(98)
+    // updates with a chat but no message work with an explicit message id
+    await fromJoinRequest.deleteAllMessageReactions(97)
+
+    t.deepEqual(calls, [
+        [
+            'deleteMessageReaction',
+            {
+                chat_id: 42,
+                message_id: 7,
+                reaction: { type: 'emoji', emoji: '👍' },
+            },
+        ],
+        ['deleteAllMessageReactions', { chat_id: 42, message_id: 7 }],
+        ['deleteAllMessageReactions', { chat_id: 42, message_id: 12 }],
+        [
+            'deleteMessageReaction',
+            {
+                chat_id: 42,
+                message_id: 99,
+                reaction: { type: 'emoji', emoji: '🔥' },
+            },
+        ],
+        ['deleteAllMessageReactions', { chat_id: 42, message_id: 98 }],
+        ['deleteAllMessageReactions', { chat_id: -100, message_id: 97 }],
+    ])
+})
+
+test('Context reaction removal throws without a chat or message', (t) => {
+    const { telegram, calls } = recordingTelegram()
+    const noChat = new Context(inlineQueryUpdate, telegram, botInfo)
+    const noMessage = new Context(chatJoinRequestUpdate, telegram, botInfo)
+
+    for (const [ctx, updateType] of [
+        [noChat, 'inline_query'],
+        [noMessage, 'chat_join_request'],
+    ]) {
+        t.throws(() => ctx.deleteMessageReaction('👍'), {
+            instanceOf: TypeError,
+            message: `Telegraf: "deleteMessageReaction" isn't available for "${updateType}"`,
+        })
+        t.throws(() => ctx.deleteAllMessageReactions(), {
+            instanceOf: TypeError,
+            message: `Telegraf: "deleteAllMessageReactions" isn't available for "${updateType}"`,
+        })
+    }
+    // an explicit message id cannot stand in for a missing chat
+    t.throws(() => noChat.deleteAllMessageReactions(5), {
+        instanceOf: TypeError,
+        message: `Telegraf: "deleteAllMessageReactions" isn't available for "inline_query"`,
+    })
+    t.throws(() => noChat.deleteMessageReaction('👍', 5), {
+        instanceOf: TypeError,
+        message: `Telegraf: "deleteMessageReaction" isn't available for "inline_query"`,
+    })
+    t.deepEqual(calls, [])
+})
+
+test('Context join request query helpers use the query of the update', async (t) => {
+    const { telegram, calls } = recordingTelegram({
+        inline_message_id: 'inline-1',
+    })
+    const ctx = new Context(joinRequestQueryUpdate, telegram, botInfo)
+    const webApp = { url: 'https://example.test/review' }
+
+    t.deepEqual(await ctx.sendChatJoinRequestWebApp(webApp), {
+        inline_message_id: 'inline-1',
+    })
+    await ctx.answerChatJoinRequestQuery(true)
+    await ctx.answerChatJoinRequestQuery(false)
+
+    t.deepEqual(calls, [
+        ['sendChatJoinRequestWebApp', { query_id: 'jrq-1', web_app: webApp }],
+        ['answerChatJoinRequestQuery', { query_id: 'jrq-1', approve: true }],
+        ['answerChatJoinRequestQuery', { query_id: 'jrq-1', approve: false }],
+    ])
+    t.is(calls[0][1].web_app, webApp)
+})
+
+test('Context join request query helpers throw without a query', (t) => {
+    const { telegram, calls } = recordingTelegram()
+    const cases = [
+        // a join request from a chat without join request queries
+        ['chat_join_request', chatJoinRequestUpdate],
+        ['message', plainMessageUpdate],
+        ['inline_query', inlineQueryUpdate],
+    ]
+
+    for (const [updateType, update] of cases) {
+        const ctx = new Context(update, telegram, botInfo)
+        t.throws(() => ctx.answerChatJoinRequestQuery(true), {
+            instanceOf: TypeError,
+            message: `Telegraf: "answerChatJoinRequestQuery" isn't available for "${updateType}"`,
+        })
+        t.throws(
+            () =>
+                ctx.sendChatJoinRequestWebApp({ url: 'https://example.test' }),
+            {
+                instanceOf: TypeError,
+                message: `Telegraf: "sendChatJoinRequestWebApp" isn't available for "${updateType}"`,
+            }
+        )
+    }
+    t.deepEqual(calls, [])
+})
+
+test('reaction removal and join request queries serialize to the Bot API as JSON', async (t) => {
+    const { bot, requests } = offlineTelegraf({
+        sendChatJoinRequestWebApp: { inline_message_id: 'inline-1' },
+    })
+
+    bot.on('message_reaction', async (ctx) => {
+        await ctx.deleteMessageReaction('👍')
+        await ctx.deleteAllMessageReactions()
+    })
+    bot.on('chat_join_request', async (ctx) => {
+        t.deepEqual(
+            await ctx.sendChatJoinRequestWebApp({
+                url: 'https://example.test/review',
+            }),
+            { inline_message_id: 'inline-1' }
+        )
+        await ctx.answerChatJoinRequestQuery(false)
+    })
+    await bot.handleUpdate(reactionUpdate)
+    await bot.handleUpdate(joinRequestQueryUpdate)
+
+    t.deepEqual(requests, [
+        [
+            'deleteMessageReaction',
+            {
+                chat_id: 42,
+                message_id: 7,
+                reaction: { type: 'emoji', emoji: '👍' },
+            },
+        ],
+        ['deleteAllMessageReactions', { chat_id: 42, message_id: 7 }],
+        [
+            'sendChatJoinRequestWebApp',
+            // the web app { url } stays JSON instead of being downloaded as a file
+            {
+                query_id: 'jrq-1',
+                web_app: { url: 'https://example.test/review' },
+            },
+        ],
+        ['answerChatJoinRequestQuery', { query_id: 'jrq-1', approve: false }],
+    ])
+})
+
+test('Telegram polls accept option objects with media', async (t) => {
+    const { telegram, calls } = recordingTelegram()
+    const pollMedia = { type: 'link', url: 'https://example.test' }
+    const mapOption = {
+        text: 'Map',
+        media: { type: 'location', latitude: 1, longitude: 2 },
+    }
+
+    await telegram.sendPoll(42, 'Which?', ['Dog', catOption, mapOption], {
+        media: pollMedia,
+    })
+    await telegram.sendQuiz(42, 'Q?', [catOption, 'Dog'], {
+        correct_option_ids: [0],
+        explanation: 'Cats',
+        explanation_media: { type: 'sticker', media: 'sticker-id' },
+    })
+    // string-only options keep their pre-10.3 payload
+    await telegram.sendPoll(42, 'Legacy?', ['yes', 'no'])
+
+    t.deepEqual(calls, [
+        [
+            'sendPoll',
+            {
+                chat_id: 42,
+                type: 'regular',
+                question: 'Which?',
+                options: [{ text: 'Dog' }, catOption, mapOption],
+                media: pollMedia,
+            },
+        ],
+        [
+            'sendPoll',
+            {
+                chat_id: 42,
+                type: 'quiz',
+                question: 'Q?',
+                options: [catOption, { text: 'Dog' }],
+                correct_option_ids: [0],
+                explanation: 'Cats',
+                explanation_media: { type: 'sticker', media: 'sticker-id' },
+            },
+        ],
+        [
+            'sendPoll',
+            {
+                chat_id: 42,
+                type: 'regular',
+                question: 'Legacy?',
+                options: [{ text: 'yes' }, { text: 'no' }],
+            },
+        ],
+    ])
+    // option objects are forwarded as-is
+    t.is(calls[0][1].options[1], catOption)
+    t.is(calls[1][1].options[0], catOption)
+})
+
+test('Context poll helpers accept option objects with media', async (t) => {
+    const { telegram, calls } = recordingTelegram()
+    const ctx = new Context(topicMessageUpdate, telegram, botInfo)
+    const defaults = {
+        chat_id: 42,
+        message_thread_id: 9,
+        business_connection_id: undefined,
+    }
+
+    await ctx.sendPoll('Which?', ['Dog', catOption])
+    await ctx.replyWithPoll('Which?', [catOption, 'Dog'], {
+        media: { type: 'photo', media: 'poll-photo-id' },
+    })
+    await ctx.sendQuiz('Q?', ['Dog', catOption], { correct_option_ids: [1] })
+    await ctx.replyWithQuiz('Q?', [catOption, 'Dog'])
+    await withNewReplies(ctx, (replyCtx) =>
+        replyCtx.replyWithPoll('Reply?', ['Dog', catOption])
+    )
+
+    t.deepEqual(calls, [
+        [
+            'sendPoll',
+            {
+                ...defaults,
+                type: 'regular',
+                question: 'Which?',
+                options: [{ text: 'Dog' }, catOption],
+            },
+        ],
+        [
+            'sendPoll',
+            {
+                ...defaults,
+                type: 'regular',
+                question: 'Which?',
+                options: [catOption, { text: 'Dog' }],
+                media: { type: 'photo', media: 'poll-photo-id' },
+            },
+        ],
+        [
+            'sendPoll',
+            {
+                ...defaults,
+                type: 'quiz',
+                question: 'Q?',
+                options: [{ text: 'Dog' }, catOption],
+                correct_option_ids: [1],
+            },
+        ],
+        [
+            'sendPoll',
+            {
+                ...defaults,
+                type: 'quiz',
+                question: 'Q?',
+                options: [catOption, { text: 'Dog' }],
+            },
+        ],
+        [
+            'sendPoll',
+            {
+                chat_id: 42,
+                type: 'regular',
+                question: 'Reply?',
+                options: [{ text: 'Dog' }, catOption],
+                reply_parameters: { message_id: 5 },
+            },
+        ],
+    ])
+})
+
+test('Bot API 10.3 live photo, poll media, reaction and join request fields are typed', (t) => {
+    const files = {
+        manage: readTypeFile('manage'),
+        message: readTypeFile('message'),
+        methods: readTypeFile('methods'),
+    }
+    const livePhoto = getMethodArgs(files.methods, 'sendLivePhoto')
+    const inputMediaLivePhoto = getInterface(
+        files.methods,
+        'InputMediaLivePhoto'
+    )
+    const inputPaidLivePhoto = getInterface(
+        files.methods,
+        'InputPaidMediaLivePhoto'
+    )
+    const voiceNote = getInterface(files.methods, 'InputMediaVoiceNote')
+    const poll = getMethodArgs(files.methods, 'sendPoll')
+    const pollOption = getInterface(files.message, 'InputPollOption')
+    const pollMedia = getTypeAlias(files.message, 'InputPollMedia')
+    const inputPollMediaNamespace = getBlock(
+        files.message,
+        /\bdeclare namespace InputPollMedia\b/
+    )
+    const deleteReaction = getMethodArgs(files.methods, 'deleteMessageReaction')
+    const deleteAllReactions = getMethodArgs(
+        files.methods,
+        'deleteAllMessageReactions'
+    )
+    const answerQuery = getMethodArgs(
+        files.methods,
+        'answerChatJoinRequestQuery'
+    )
+    const webApp = getMethodArgs(files.methods, 'sendChatJoinRequestWebApp')
+    const checks = {
+        'sendLivePhoto files':
+            hasField(livePhoto, 'photo', 'F | string') &&
+            hasField(livePhoto, 'video', 'F'),
+        'sendLivePhoto caption':
+            hasOptionalField(livePhoto, 'caption', 'string') &&
+            hasOptionalField(
+                livePhoto,
+                'caption_entities',
+                'MessageEntity[]'
+            ) &&
+            hasOptionalField(livePhoto, 'show_caption_above_media', 'true'),
+        'sendLivePhoto has no has_spoiler': !hasAnyField(
+            livePhoto,
+            'has_spoiler'
+        ),
+        'sendLivePhoto.ephemeral_message_parameters': hasOptionalField(
+            livePhoto,
+            'ephemeral_message_parameters',
+            'EphemeralMessageParameters'
+        ),
+        'sendLivePhoto returns LivePhotoMessage':
+            getMethodReturnType(files.methods, 'sendLivePhoto') ===
+            'Message.LivePhotoMessage & Message.BusinessSentMessage',
+        'Message.live_photo': hasField(
+            getInterface(files.message, 'LivePhotoMessage'),
+            'live_photo',
+            'LivePhoto'
+        ),
+        InputMediaLivePhoto:
+            hasField(inputMediaLivePhoto, 'type', '"live_photo"') &&
+            hasField(inputMediaLivePhoto, 'media', 'F | string') &&
+            hasField(inputMediaLivePhoto, 'video', 'F'),
+        InputPaidMediaLivePhoto:
+            hasField(inputPaidLivePhoto, 'type', '"live_photo"') &&
+            hasField(inputPaidLivePhoto, 'media', 'F | string') &&
+            hasField(inputPaidLivePhoto, 'video', 'F'),
+        InputMediaVoiceNote:
+            hasField(voiceNote, 'type', '"voice_note"') &&
+            hasField(voiceNote, 'media', 'F | string') &&
+            hasOptionalField(voiceNote, 'caption', 'string'),
+        'InputMedia includes live photos and voice notes':
+            hasTypeMember(
+                files.methods,
+                'InputMedia<F>',
+                'InputMediaLivePhoto<F>'
+            ) &&
+            hasTypeMember(
+                files.methods,
+                'InputMedia<F>',
+                'InputMediaVoiceNote<F>'
+            ),
+        'InputPaidMedia includes live photos': hasTypeMember(
+            files.methods,
+            'InputPaidMedia<F>',
+            'InputPaidMediaLivePhoto<F>'
+        ),
+        'sendPaidMedia.media': hasField(
+            getMethodArgs(files.methods, 'sendPaidMedia'),
+            'media',
+            'InputPaidMedia<F>[]'
+        ),
+        'sendMediaGroup excludes live photos and voice notes': hasField(
+            getMethodArgs(files.methods, 'sendMediaGroup'),
+            'media',
+            'ReadonlyArray<InputMediaAudio<F> | InputMediaDocument<F> | InputMediaPhoto<F> | InputMediaVideo<F>>'
+        ),
+        'sendPoll media':
+            hasOptionalField(poll, 'media', 'InputPollMedia') &&
+            hasOptionalField(poll, 'explanation_media', 'InputPollMedia') &&
+            hasField(poll, 'options', 'readonly InputPollOption[]'),
+        'sendPoll has no poll_media': !hasAnyField(poll, 'poll_media'),
+        InputPollOption:
+            hasField(pollOption, 'text', 'string') &&
+            hasOptionalField(pollOption, 'media', 'InputPollMedia'),
+        'InputPollMedia variants': [
+            'InputPollMedia.PhotoMedia',
+            'InputPollMedia.VideoMedia',
+            'InputPollMedia.StickerMedia',
+            'InputPollMedia.LocationMedia',
+            'InputPollMedia.VenueMedia',
+            'InputPollMedia.LinkMedia',
+        ].every((member) => pollMedia.includes(member)),
+        'InputPollMedia files are referenced, not uploaded': [
+            'PhotoMedia',
+            'VideoMedia',
+            'StickerMedia',
+        ].every((name) =>
+            hasField(
+                // the incoming PollMedia namespace declares interfaces with the same names first
+                getInterface(inputPollMediaNamespace, name),
+                'media',
+                'string'
+            )
+        ),
+        deleteMessageReaction:
+            hasField(deleteReaction, 'chat_id', 'number | string') &&
+            hasField(deleteReaction, 'message_id', 'number') &&
+            hasField(deleteReaction, 'reaction', 'ReactionType') &&
+            getMethodReturnType(files.methods, 'deleteMessageReaction') ===
+                'true',
+        deleteAllMessageReactions:
+            hasField(deleteAllReactions, 'chat_id', 'number | string') &&
+            hasField(deleteAllReactions, 'message_id', 'number') &&
+            getMethodReturnType(files.methods, 'deleteAllMessageReactions') ===
+                'true',
+        'ChatJoinRequest.query_id': hasOptionalField(
+            getInterface(files.manage, 'ChatJoinRequest'),
+            'query_id',
+            'string'
+        ),
+        answerChatJoinRequestQuery:
+            hasField(answerQuery, 'query_id', 'string') &&
+            hasField(answerQuery, 'approve', 'boolean') &&
+            getMethodReturnType(files.methods, 'answerChatJoinRequestQuery') ===
+                'true',
+        sendChatJoinRequestWebApp:
+            hasField(webApp, 'query_id', 'string') &&
+            hasField(webApp, 'web_app', 'WebAppInfo') &&
+            getMethodReturnType(files.methods, 'sendChatJoinRequestWebApp') ===
+                'SentWebAppMessage',
+    }
+    const missing = Object.entries(checks)
+        .filter(([, ok]) => !ok)
+        .map(([name]) => name)
+    t.deepEqual(missing, [])
+})
+
+// Context helpers for the Bot API 10.3 chat management methods, keyed by the method they call
+const contextChatManagementCalls = {
+    answerChatJoinRequestQuery: (ctx) => ctx.answerChatJoinRequestQuery(true),
+    deleteAllMessageReactions: (ctx) => ctx.deleteAllMessageReactions(),
+    deleteMessageReaction: (ctx) => ctx.deleteMessageReaction('👍'),
+    sendChatJoinRequestWebApp: (ctx) =>
+        ctx.sendChatJoinRequestWebApp({ url: 'https://example.test' }),
+    sendLivePhoto: (ctx) => ctx.replyWithLivePhoto('photo-id', clipFile()),
+}
+
+test('Bot API 10.3 chat management methods are wrapped and reachable from Context', async (t) => {
+    const typed = readMethodsFromTypes()
+    for (const method of Object.keys(contextChatManagementCalls)) {
+        t.true(typed.includes(method), method)
+    }
+    // join request queries need a join request update; the others need a message
+    const updateFor = (method) =>
+        method.includes('ChatJoinRequest')
+            ? joinRequestQueryUpdate
+            : reactionUpdate
+
+    for (const [method, call] of Object.entries(contextChatManagementCalls)) {
+        const { telegram, calls } = recordingTelegram()
+        await call(new Context(updateFor(method), telegram, botInfo))
+        t.deepEqual(
+            calls.map(([name]) => name),
+            [method],
+            method
+        )
+    }
+
+    // every query_id-based method of the types reads it from the join request update
+    t.deepEqual(
+        readMethodsAcceptingField('query_id').filter((method) =>
+            method.includes('ChatJoinRequest')
+        ),
+        ['answerChatJoinRequestQuery', 'sendChatJoinRequestWebApp']
+    )
+    // every option-taking poll helper accepts option objects
+    t.deepEqual(readMethodsAcceptingField('explanation_media'), ['sendPoll'])
+})
+
+test('live photo, poll media, reaction and join request APIs are typed', async (t) => {
+    await compileTypeScript(
+        'chat-management-types.ts',
+        [
+            `import { Context, Input, Telegraf, Telegram } from '${packageRoot}'`,
+            `import { useNewReplies } from '${packageRoot}/future'`,
+            `import { bold } from '${packageRoot}/format'`,
+            `import type { Convenience, InputMediaLivePhoto, InputMediaVoiceNote, InputPaidMediaLivePhoto, InputPollOption, Message, SentWebAppMessage } from '${packageRoot}/types'`,
+            '',
+            'declare const ctx: Context',
+            'declare const telegram: Telegram',
+            'declare const bot: Telegraf',
+            'const clip = Input.fromBuffer(Buffer.from("clip"), "clip.mp4")',
+            '',
+            '// live photos',
+            'const live: Promise<Message.LivePhotoMessage & Message.BusinessSentMessage> = ctx.replyWithLivePhoto("photo-id", clip, { caption: bold("live"), ephemeral_message_parameters: { receiver_user_id: 1 } })',
+            'void ctx.sendLivePhoto(Input.fromLocalFile("still.jpg"), clip)',
+            'void telegram.sendLivePhoto({ chat_id: 1, photo: "photo-id", video: clip, caption: bold("formatted") })',
+            'const extra: Convenience.ExtraLivePhoto = { show_caption_above_media: true }',
+            'bot.use(useNewReplies())',
+            '// @ts-expect-error the video can only be uploaded as a new file',
+            'void ctx.replyWithLivePhoto("photo-id", "video-file-id")',
+            '// @ts-expect-error video is required',
+            'void telegram.sendLivePhoto({ chat_id: 1, photo: "photo-id" })',
+            '// @ts-expect-error sendLivePhoto has no has_spoiler (only live photo media does)',
+            'const spoiler: Convenience.ExtraLivePhoto = { has_spoiler: true }',
+            '',
+            '// reactions',
+            'void ctx.deleteMessageReaction("👍")',
+            'void ctx.deleteMessageReaction("5368324170671202286", 12)',
+            'void ctx.deleteMessageReaction({ type: "paid" })',
+            'const removedAll: Promise<true> = ctx.deleteAllMessageReactions()',
+            'void telegram.deleteMessageReaction({ chat_id: 1, message_id: 2, reaction: { type: "emoji", emoji: "👍" } })',
+            '// @ts-expect-error not a Telegram reaction emoji',
+            'void ctx.deleteMessageReaction("not-an-emoji")',
+            '// @ts-expect-error deleteMessageReaction removes a single reaction',
+            'void ctx.deleteMessageReaction(["👍", "🔥"])',
+            '',
+            '// join request queries',
+            'const answered: Promise<true> = ctx.answerChatJoinRequestQuery(true)',
+            'const webApp: Promise<SentWebAppMessage> = ctx.sendChatJoinRequestWebApp({ url: "https://example.test/review" })',
+            '// @ts-expect-error approve is required',
+            'void ctx.answerChatJoinRequestQuery()',
+            '',
+            '// polls with media',
+            'const option: InputPollOption = { text: "Cat", media: { type: "photo", media: "cat-file-id" } }',
+            'const options: Convenience.PollOption[] = ["Dog", option, { text: "Map", media: { type: "location", latitude: 1, longitude: 2 } }]',
+            'void ctx.replyWithPoll("Which?", options, { media: { type: "link", url: "https://example.test" } })',
+            'void ctx.sendQuiz("Q?", ["a", "b"], { correct_option_ids: [0], explanation_media: { type: "sticker", media: "sticker-id" } })',
+            'void ctx.sendPoll("Which?", options)',
+            'void ctx.sendQuiz("Q?", [option, "Dog"], { correct_option_ids: [0] })',
+            'void ctx.replyWithQuiz("Q?", ["Dog", option])',
+            'void telegram.sendPoll(1, "Q?", ["a", { text: "b", text_entities: [] }])',
+            'void telegram.sendQuiz(1, "Q?", ["a", "b"])',
+            '// @ts-expect-error poll media is referenced by file_id or URL, not uploaded',
+            'void ctx.sendPoll("Q?", ["a", "b"], { media: { type: "photo", media: Input.fromBuffer(Buffer.from("x")) } })',
+            '// @ts-expect-error unknown poll media type',
+            'void ctx.sendPoll("Q?", [{ text: "a", media: { type: "audio", media: "x" } }, "b"])',
+            '// @ts-expect-error the field is media, not poll_media',
+            'void ctx.sendPoll("Q?", ["a", "b"], { poll_media: { type: "photo", media: "x" } })',
+            '',
+            '// live photos and voice notes where the Bot API accepts them',
+            'const paid: InputPaidMediaLivePhoto = { type: "live_photo", media: Input.fromBuffer(Buffer.from("s")), video: clip }',
+            'void telegram.sendPaidMedia(1, [paid, { type: "photo", media: "photo-id" }], 10)',
+            'const voice: InputMediaVoiceNote = { type: "voice_note", media: Input.fromBuffer(Buffer.from("ogg")) }',
+            'void ctx.editMessageMedia({ ...voice, caption: bold("voice") })',
+            'const livePhotoMedia: InputMediaLivePhoto = { type: "live_photo", media: "photo-id", video: clip }',
+            'void telegram.editEphemeralMessageMedia(1, "eph", livePhotoMedia)',
+            '// @ts-expect-error media groups accept only photos, videos, audios or documents',
+            'void ctx.replyWithMediaGroup([voice])',
+            '// @ts-expect-error media groups accept only photos, videos, audios or documents',
+            'void telegram.sendMediaGroup(1, [livePhotoMedia])',
+            '// @ts-expect-error paid media live photos need an uploaded video',
+            'void telegram.sendPaidMedia(1, [{ type: "live_photo", media: "x", video: "video-id" }], 1)',
+            '',
+            'void [live, extra, spoiler, removedAll, answered, webApp]',
         ].join('\n')
     )
     t.pass()
@@ -3943,8 +4950,8 @@ test('plain object fetch errors are sanitized before exposure', async (t) => {
     t.false(inspected.includes('secret'))
 })
 
-test('native fetch is accepted as telegram fetch type', (t) => {
-    compileTypeScript(
+test('native fetch is accepted as telegram fetch type', async (t) => {
+    await compileTypeScript(
         'native-fetch.ts',
         [
             `import { Telegraf } from '${packageRoot}'`,
@@ -3959,8 +4966,8 @@ test('native fetch is accepted as telegram fetch type', (t) => {
     t.pass()
 })
 
-test('scene helper types are exported and infer state', (t) => {
-    compileTypeScript(
+test('scene helper types are exported and infer state', async (t) => {
+    await compileTypeScript(
         'scene-types.ts',
         [
             `import { Context, Scenes } from '${packageRoot}'`,
