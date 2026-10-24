@@ -19,9 +19,9 @@ export type NonemptyReadonlyArray<T> = readonly [T, ...T[]]
 // prettier-ignore
 export type ExclusiveKeys<A extends object, B extends object> = keyof Omit<A, keyof B>
 
-export function fmtCaption<
-    Extra extends { caption?: string | FmtString } | undefined,
->(
+// Constrained to `object` rather than `{ caption?: ... }` so unions containing
+// caption-less members (e.g. InputMediaLocation) are accepted
+export function fmtCaption<Extra extends object | undefined>(
     extra?: Extra
 ): Extra extends undefined
     ? undefined

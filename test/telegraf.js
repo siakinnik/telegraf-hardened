@@ -1,3 +1,5 @@
+'use strict'
+
 const test = require('ava')
 const {
     Telegraf,
@@ -351,6 +353,43 @@ test('launch callback runs after polling is initialized', async (t) => {
 
     await t.notThrowsAsync(bot.launch(() => bot.stop('test')))
 })
+
+const shutdownRaces = {
+    connection: new TelegrafNetworkError(
+        'Socket closed',
+        { method: 'getUpdates' },
+        { errorName: 'TypeError', code: 'ECONNRESET', transient: true }
+    ),
+    timeout: new TelegrafNetworkError(
+        'Timed out',
+        { method: 'getUpdates' },
+        { errorName: 'TimeoutError', transient: true }
+    ),
+    rateLimited: new TelegramError({
+        error_code: 429,
+        description: 'Too many requests',
+        parameters: { retry_after: 30 },
+    }),
+    gateway: new TelegramError({ error_code: 502, description: 'Bad gateway' }),
+    unavailable: new TelegramError({
+        error_code: 503,
+        description: 'Service unavailable',
+    }),
+}
+
+for (const [name, error] of Object.entries(shutdownRaces)) {
+    test(`launch ends cleanly when ${name} races with stop`, async (t) => {
+        const bot = createBot('token')
+        const updateCalls = stubPollingApi(bot, {
+            onUpdateCall: () => {
+                bot.stop('shutdown race')
+                throw error
+            },
+        })
+        await t.notThrowsAsync(bot.launch())
+        t.is(updateCalls(), 1)
+    })
+}
 
 test('polling can retry one conflict when configured', async (t) => {
     const bot = createBot('token')

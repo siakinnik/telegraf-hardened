@@ -1,13 +1,8 @@
 'use strict'
 
 const test = require('ava')
-const { Telegraf, session, Scenes } = require('../')
-
-function createBot(...args) {
-    const bot = new Telegraf(...args)
-    bot.botInfo = { id: 42, is_bot: true, username: 'bot', first_name: 'Bot' }
-    return bot
-}
+const { session, Scenes } = require('../')
+const { createBot } = require('./_helpers')
 
 const BaseTextMessage = {
     chat: { id: 1 },

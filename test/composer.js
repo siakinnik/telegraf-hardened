@@ -1,12 +1,7 @@
 const { default: test } = require('ava')
 const { Composer, Telegraf } = require('../')
 const { message } = require('../filters')
-
-function createBot(...args) {
-    const bot = new Telegraf(...args)
-    bot.botInfo = { id: 8, is_bot: true, username: 'bot', first_name: 'Bot' }
-    return bot
-}
+const { createBot } = require('./_helpers')
 
 const baseMessage = {
     chat: { id: 1, type: 'private' },

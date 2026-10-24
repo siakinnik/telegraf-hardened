@@ -1,4 +1,4 @@
-> **Update (September 2026):** Active development has resumed! WIP: API 10.3
+> **Development branch (October 2026):** Bot API 10.3 integration is under review for v6.1. It is not released yet. See the [unreleased notes](release-notes/next.md) for corrected API contracts and release prerequisites.
 
 <header>
 
@@ -12,7 +12,7 @@ Telegraf-hardened - Community-led fork of Telegraf.js. Focusing on stability, st
 <p>Modern Telegram Bot API framework for Node.js</p>
 
 <a href="https://core.telegram.org/bots/api">   
-    <img src="https://img.shields.io/badge/Bot%20API-v9.6-f36caf.svg?style=flat-square" alt="Bot API Version" />
+    <img src="https://img.shields.io/badge/Bot%20API-v10.3%20candidate-f36caf.svg?style=flat-square" alt="Bot API Version" />
 </a>
 </div>
 
@@ -30,16 +30,14 @@ This fork exists and improves thanks to the amazing contributors:
 
 ### 🎯 Current Status: v3 Strategic Roadmap Fully Closed ✅
 
-Version: 🚀 **v6.0.0 Stable** | 🛡 **Hardened** | API Full 9.6
+Released baseline: **v6.0.0 / Bot API 9.6**. This branch targets **v6.1 / Bot API 10.3**; see [Roadmap v4](https://github.com/telegraf-hardened/telegraf-hardened/issues/28).
 Closed Roadmaps:
 
 -   **[Strategic Roadmap v1](https://github.com/telegraf-hardened/telegraf-hardened/issues/1)**
 -   **[Roadmap v2](https://github.com/telegraf-hardened/telegraf-hardened/issues/15)**
 -   **[Roadmap v3](https://github.com/telegraf-hardened/telegraf-hardened/issues/20)**
 
-API 10.0 planned
-
-We have successfully integrated all planned critical improvements from the community that were abandoned by the official Telegraf upstream. **Telegraf-hardened is now a feature-complete and stable alternative.**
+The earlier roadmaps are closed. Bot API 10.3 integration, its corrected types release, and community live-bot validation are tracked separately; passing offline tests is not a release announcement.
 
 <!-- Check our current active Roadmap **[Roadmap v3](https://github.com/telegraf-hardened/telegraf-hardened/issues/20)** -->
 
@@ -125,7 +123,7 @@ const bot = new Telegraf(process.env.BOT_TOKEN, {
 
 ### Features
 
--   Full [Telegram Bot API 9.6](https://core.telegram.org/bots/api) support
+-   [Telegram Bot API 10.3](https://core.telegram.org/bots/api) method coverage on this development branch, with runtime payload and TypeScript contract tests
 -   [Excellent TypeScript typings](https://github.com/telegraf-hardened/telegraf-hardened/releases/tag/v5.0.0-beta.3)
 -   Lightweight: compare with [node-telegram-bot-api](https://packagephobia.com/result?p=telegraf-hardened,node-telegram-bot-api) or [original telegraf](https://packagephobia.com/result?p=telegraf-hardened,telegraf)
 -   [AWS **λ**](https://docs.aws.amazon.com/lambda/latest/dg/nodejs-prog-model-handler.html)
@@ -144,7 +142,7 @@ The complete documentation for `telegraf-hardened` is available at:
 ### Example
 
 ```js
-const { Telegraf } = require('telegraf-hardened')
+const { Telegraf, Input } = require('telegraf-hardened')
 const { message } = require('telegraf-hardened/filters')
 
 const bot = new Telegraf(process.env.BOT_TOKEN)
@@ -169,7 +167,7 @@ const bot = new Telegraf(process.env.BOT_TOKEN)
             ctx.from.id
         )
         return ctx.reply(`You have ${total_count} gifts!`)
-    п   })
+    })
     bot.launch()
 })()
 
@@ -181,16 +179,18 @@ process.once('SIGTERM', () => bot.stop('SIGTERM'))
 ```js
 const { Telegraf } = require('telegraf-hardened')
 
-const bot = new Telegraf(process.env.BOT_TOKEN)(async () => {
+const bot = new Telegraf(process.env.BOT_TOKEN)
+
+;(async () => {
     await bot.validateTokenAsync()
     bot.command('oldschool', (ctx) => ctx.reply('Hello'))
     bot.command('hipster', Telegraf.reply('λ'))
     bot.launch({
         polling: {
-        retryOnConflict: true, // Enable exponential backoff on 409 errors
-        maxRetryDelay: 30000,  // Cap retry delay at 30 seconds (default 60s)
-    },
-    )
+            retryOnConflict: true, // Enable exponential backoff on 409 errors
+            maxRetryDelay: 30000, // Cap retry delay at 30 seconds (default 60s)
+        },
+    })
 })()
 
 // Enable graceful stop
@@ -225,6 +225,8 @@ BotFather will give you a _token_, something like `123456789:AbCdefGhIJKlmNoPQRs
 ```shellscript
 $ npm install telegraf-hardened
 ```
+
+This installs the published release, not the unreleased 10.3 work. For development on this branch, run `npm ci --ignore-scripts` followed by `npm run build`. The corrected Bot API 10.3 types are installed from npm as `@telegraf-hardened/types@^10.3.1`.
 
 <!--
 or
@@ -403,6 +405,38 @@ createServer(tlsOptions, await bot.createWebhook({ domain: "example.com" })).lis
 
 ### Error handling
 
+Bot API fetch failures, including failures while reading the response body,
+reject with `TelegrafNetworkError`. It exposes the API method, request metadata,
+`code`, `errorName`, and a `transient` flag. Its `cause` is a sanitized diagnostic
+copy, not the original transport error. Diagnostic cause chains are bounded;
+bot tokens are redacted without modifying native or custom fetch errors.
+
+Synchronous throws from an injected fetch use the same error boundary as
+rejected promises. Fetch is invoked as a standalone function; bind transports
+which require an instance receiver before injecting them.
+
+An unreadable HTTP 4xx body preserves its status as `TelegramError`, unless
+reading was interrupted by a caller abort or request timeout. In that case,
+the cancellation reason is preserved as `TelegrafNetworkError`. HTTP 5xx bodies
+are cancelled best-effort without waiting for cancellation to finish, so a
+pending or failed cancellation cannot hide the HTTP error or prevent retries.
+
+Long polling retries transient transport errors (including native fetch
+`TimeoutError`), HTTP 5xx and Telegram 429 responses. HTTP 409 retries during
+normal polling only when `retryOnConflict` is enabled; otherwise it propagates.
+
+Once its own stop signal is set, polling exits normally on a typed request
+`AbortError`, transient transport error, HTTP 429 or HTTP 5xx, without retrying.
+HTTP 401 and HTTP 409 still propagate after stop, even when `retryOnConflict`
+is enabled. Other non-retryable API errors, permanent network errors and
+unexpected request errors also propagate if they race with `stop()`.
+Propagating HTTP 401 or HTTP 409 errors skips final update-offset synchronization.
+An unsolicited transport `AbortError` while polling is active still propagates.
+`bot.stop()` interrupts retry backoff, including opt-in 409 conflict retries,
+before the final update-offset synchronization.
+Update handlers run outside the request-error catch; stopping polling does not
+suppress their errors.
+
 If middleware throws an error or times out, Telegraf calls `bot.handleError`. If it rethrows, update source closes, and then the error is printed to console and process terminates. If it does not rethrow, the error is swallowed.
 
 Default `bot.handleError` always rethrows. You can overwrite it using `bot.catch` if you need to.
@@ -412,6 +446,13 @@ Default `bot.handleError` always rethrows. You can overwrite it using `bot.catch
 ℹ️ In production, `systemd` or [`pm2`](https://www.npmjs.com/package/pm2) can restart your bot if it exits for any reason.
 
 ## Advanced topics
+
+### Running the tests
+
+`npm ci` followed by `npm test` builds the package and runs the
+complete offline suite, including middleware, scenes, sessions, API contracts,
+network errors and polling. No bot token is required. `npm run test:api-sync`
+runs only the narrower Bot API contract suite; it is not a full regression run.
 
 ### Working with files
 
@@ -455,6 +496,8 @@ bot.on('message', async (ctx) => {
     )
 })
 ```
+
+`Input.fromURLStream` and `{ url }` uploads make the bot's own host download the URL; a response with an HTTP error status is rejected rather than uploaded. Redirects are followed and the download size is not limited, so do not pass URLs supplied by bot users without validating them first: they can point at internal addresses (SSRF).
 
 ### Middleware
 

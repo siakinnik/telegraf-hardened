@@ -2,13 +2,13 @@ import * as tg from '../types/typegram'
 import * as tt from '../../telegram-types'
 import ApiClient from './client'
 import d from 'debug'
-import { promisify } from 'util'
+import { setTimeout as wait } from 'timers/promises'
 import { TelegrafNetworkError, TelegramError } from './error'
 import type { Telegraf } from '../../telegraf'
 const debug = d('telegraf:polling')
-const wait = promisify(setTimeout)
 const DEFAULT_CONFLICT_RETRY_DELAY = 1_000
 const DEFAULT_MAX_CONFLICT_RETRY_DELAY = 60_000
+const SYNC_OFFSET_TIMEOUT = 5_000
 function always<T>(x: T) {
     return () => x
 }
@@ -50,12 +50,27 @@ export class Polling {
                     parameters?: { retry_after: number }
                     code?: string | number
                 }
+                const unauthorizedOrConflict =
+                    err instanceof TelegramError &&
+                    (err.code === 401 || err.code === 409)
 
-                if (
-                    err instanceof TelegrafNetworkError &&
-                    err.errorName === 'AbortError'
-                ) {
-                    return
+                if (this.abortController.signal.aborted) {
+                    if (
+                        err instanceof TelegrafNetworkError &&
+                        err.errorName === 'AbortError'
+                    )
+                        return
+                    // a retryable failure racing with stop() should not fail a
+                    // graceful shutdown
+                    if (
+                        (err instanceof TelegrafNetworkError &&
+                            err.transient) ||
+                        (err instanceof TelegramError &&
+                            (err.code === 429 || err.code >= 500))
+                    )
+                        return
+                    if (unauthorizedOrConflict) this.skipOffsetSync = true
+                    throw err
                 }
 
                 if (
@@ -81,7 +96,7 @@ export class Polling {
                         this.retryCount
                     )
 
-                    await wait(delay)
+                    await this.wait(delay)
                     continue
                 }
 
@@ -99,29 +114,33 @@ export class Polling {
                         retryAfter,
                         err
                     )
-                    await wait(retryAfter * 1000)
+                    await this.wait(retryAfter * 1000)
                     continue
                 }
-                if (
-                    err instanceof TelegramError &&
-                    // Unauthorized      Conflict
-                    (err.code === 401 || err.code === 409)
-                ) {
-                    this.skipOffsetSync = true
-                    throw err
-                }
+                if (unauthorizedOrConflict) this.skipOffsetSync = true
                 throw err
             }
         } while (!this.abortController.signal.aborted)
     }
 
+    private async wait(delay: number) {
+        const { signal } = this.abortController
+        try {
+            await wait(delay, undefined, { signal })
+        } catch (error) {
+            if (!signal.aborted) throw error
+        }
+    }
+
     private async syncUpdateOffset() {
         if (this.skipOffsetSync) return
         debug('Syncing update offset...')
-        await this.telegram.callApi('getUpdates', {
-            offset: this.offset,
-            limit: 1,
-        })
+        // stop() must not wait for the default request timeout on a flaky network
+        await this.telegram.callApi(
+            'getUpdates',
+            { offset: this.offset, limit: 1 },
+            { signal: AbortSignal.timeout(SYNC_OFFSET_TIMEOUT) as AbortSignal }
+        )
     }
 
     async loop(handleUpdate: (updates: tg.Update) => Promise<void>) {
