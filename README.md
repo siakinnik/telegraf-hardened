@@ -1,5 +1,3 @@
-> **Development branch (October 2026):** Bot API 10.3 integration is under review for v6.1. It is not released yet. See the [unreleased notes](release-notes/next.md) for corrected API contracts and release prerequisites.
-
 <header>
 
 <div align="center">
@@ -12,7 +10,7 @@ Telegraf-hardened - Community-led fork of Telegraf.js. Focusing on stability, st
 <p>Modern Telegram Bot API framework for Node.js</p>
 
 <a href="https://core.telegram.org/bots/api">   
-    <img src="https://img.shields.io/badge/Bot%20API-v10.3%20candidate-f36caf.svg?style=flat-square" alt="Bot API Version" />
+    <img src="https://img.shields.io/badge/Bot%20API-v10.3-f36caf.svg?style=flat-square" alt="Bot API Version" />
 </a>
 </div>
 
@@ -30,20 +28,26 @@ This fork exists and improves thanks to the amazing contributors:
 
 ### 🎯 Current Status: v3 Strategic Roadmap Fully Closed ✅
 
-Released baseline: **v6.0.0 / Bot API 9.6**. This branch targets **v6.1 / Bot API 10.3**; see [Roadmap v4](https://github.com/telegraf-hardened/telegraf-hardened/issues/28).
+Current release: **v6.1 / Bot API 10.3**.
 Closed Roadmaps:
 
 -   **[Strategic Roadmap v1](https://github.com/telegraf-hardened/telegraf-hardened/issues/1)**
 -   **[Roadmap v2](https://github.com/telegraf-hardened/telegraf-hardened/issues/15)**
 -   **[Roadmap v3](https://github.com/telegraf-hardened/telegraf-hardened/issues/20)**
 
-The earlier roadmaps are closed. Bot API 10.3 integration, its corrected types release, and community live-bot validation are tracked separately; passing offline tests is not a release announcement.
+The earlier roadmaps are closed. See the [v6.1 release notes](release-notes/next.md) for the full list of Bot API 10.3 changes and migration notes.
 
 <!-- Check our current active Roadmap **[Roadmap v3](https://github.com/telegraf-hardened/telegraf-hardened/issues/20)** -->
 
 ### Key Improvements in this Fork already done:
 
 -   🛠 **Future:** Even stricter type validation & community-requested features.
+-   ✅ **Bot API 10.3:**
+    -   **Rich messages** — `ctx.replyWithRichMessage()` / `sendRichMessage()` with HTML, Markdown or structured blocks, streamed drafts via `sendRichMessageDraft()`, and rich edits through `editMessageText`.
+    -   **Ephemeral messages** — send a message visible to one user with `ephemeral_message_parameters`, then edit or delete it with `editEphemeralMessage*()` / `deleteEphemeralMessage()`.
+    -   **Live photos** — `ctx.replyWithLivePhoto(photo, livePhoto)`, also inside media groups and paid media.
+    -   Guest mode (`answerGuestQuery`), managed bots, poll option media, reaction moderation (`deleteMessageReaction`, `deleteAllMessageReactions`) and join-request queries (`answerChatJoinRequestQuery`, `sendChatJoinRequestWebApp`).
+    -   Types are checked against the official Bot API documentation for every type, field and method.
 -   ✅ **Resilience: 409 Conflict Retry:**
     -   Optional exponential backoff for `getUpdates` requests.
     -   Prevents bot crash-loops during Docker/PM2 restarts when the previous connection is still active.
@@ -84,13 +88,23 @@ Method signature updated to align with the latest Bot API requirements.
 
 -   **New parameter**: `format` (mandatory) is now required as the third argument.
 -   **Before**: `telegram.setStickerSetThumbnail(name, userId, thumbnail)`
--   **After**: `telegram.setStickerSetThumbnail(name, userId, format, thumbnail)`
+-   **After**: `telegram.setStickerSetThumbnail(name, userId, thumbnail, format)`
 -   **Reason**: Telegram Bot API now strictly distinguishes between sticker formats (`static`, `animated`, `video`) for thumbnails.
 
 #### **editMessageText** (Strict Mode)
 
 -   **Change**: The method now uses a Discriminated Union for parameters.
 -   **Impact**: You can no longer pass both `chat_id` and `inline_message_id` simultaneously (even as `undefined`). TypeScript will now enforce either the "Chat" signature or the "Inline" signature, preventing 400 Bad Request errors at compile time.
+-   **v6.1**: text edits and rich edits are separate. Pass either text, or `undefined` plus `{ rich_message }` — never both: `ctx.editMessageText(undefined, { rich_message: { html: '<b>Updated</b>' } })`. A variable typed as the broad `ExtraEditMessageText` may no longer compile; see the [migration notes](release-notes/next.md#breaking-type-changes).
+
+#### **ReplyParameters** (v6.1)
+
+-   **Change**: `ReplyParameters` is a union that requires a target: `message_id` or `ephemeral_message_id`.
+-   **Impact**: `{}` or all-optional reply parameters no longer compile, and the type can no longer be extended as an interface (use an intersection instead).
+
+#### **Ephemeral messages** (v6.1)
+
+-   Ephemeral messages report `message_id: 0`; use `ephemeral_message_id` to edit or delete them. Context helpers do this automatically and require the recipient's `receiverUserId` as the first argument.
 
 ## Introduction
 
@@ -123,7 +137,7 @@ const bot = new Telegraf(process.env.BOT_TOKEN, {
 
 ### Features
 
--   [Telegram Bot API 10.3](https://core.telegram.org/bots/api) method coverage on this development branch, with runtime payload and TypeScript contract tests
+-   Full [Telegram Bot API 10.3](https://core.telegram.org/bots/api) support (all 185 methods), with runtime payload and TypeScript contract tests
 -   [Excellent TypeScript typings](https://github.com/telegraf-hardened/telegraf-hardened/releases/tag/v5.0.0-beta.3)
 -   Lightweight: compare with [node-telegram-bot-api](https://packagephobia.com/result?p=telegraf-hardened,node-telegram-bot-api) or [original telegraf](https://packagephobia.com/result?p=telegraf-hardened,telegraf)
 -   [AWS **λ**](https://docs.aws.amazon.com/lambda/latest/dg/nodejs-prog-model-handler.html)
@@ -153,19 +167,30 @@ const bot = new Telegraf(process.env.BOT_TOKEN)
     bot.help((ctx) => ctx.reply('Send me a sticker'))
     bot.on(message('sticker'), (ctx) => ctx.reply('👍'))
     bot.hears('hi', (ctx) => ctx.reply('Hey there'))
-    // Example: Sending paid media (Bot API 9.6)
-    bot.command('vip', (ctx) => {
-        return ctx.telegram.sendPaidMedia(ctx.chat.id, 50, [
-            {
-                type: 'photo',
-                media: Input.fromLocalFile('./premium_content.jpg'),
-            },
-        ])
-    })
-    bot.command('my_gifts', async (ctx) => {
-        const { total_count, gifts } = await ctx.telegram.getUserGifts(
-            ctx.from.id
+    // Rich message (Bot API 10.3)
+    bot.command('rich', (ctx) =>
+        ctx.replyWithRichMessage({
+            html: '<h1>Hello</h1><p>This is a <b>rich</b> message</p>',
+        })
+    )
+    // Message only the sender can see (Bot API 10.3)
+    bot.command('secret', (ctx) =>
+        ctx.reply('Only you can see this', {
+            ephemeral_message_parameters: { receiver_user_id: ctx.from.id },
+        })
+    )
+    // Paid media for Telegram Stars
+    bot.command('vip', (ctx) =>
+        ctx.telegram.sendPaidMedia(
+            ctx.chat.id,
+            [{ type: 'photo', media: Input.fromLocalFile('./premium_content.jpg') }],
+            50
         )
+    )
+    bot.command('my_gifts', async (ctx) => {
+        const { total_count } = await ctx.telegram.getUserGifts({
+            user_id: ctx.from.id,
+        })
         return ctx.reply(`You have ${total_count} gifts!`)
     })
     bot.launch()
@@ -226,7 +251,7 @@ BotFather will give you a _token_, something like `123456789:AbCdefGhIJKlmNoPQRs
 $ npm install telegraf-hardened
 ```
 
-This installs the published release, not the unreleased 10.3 work. For development on this branch, run `npm ci --ignore-scripts` followed by `npm run build`. The corrected Bot API 10.3 types are installed from npm as `@telegraf-hardened/types@^10.3.1`.
+Bot API 10.3 types come from [`@telegraf-hardened/types`](https://www.npmjs.com/package/@telegraf-hardened/types) and are installed automatically. To work on the library itself, run `npm ci --ignore-scripts` followed by `npm run build`.
 
 <!--
 or
@@ -545,7 +570,7 @@ With this simple ability, you can:
 ### Usage with TypeScript
 
 Telegraf is written in TypeScript and therefore ships with declaration files for the entire library.
-Moreover, it includes types for the complete Telegram API via the [`typegram`](https://github.com/KnorpelSenf/typegram) package.
+Moreover, it includes types for the complete Telegram Bot API 10.3 via the [`@telegraf-hardened/types`](https://github.com/telegraf-hardened/types) package (a maintained fork of [`typegram`](https://github.com/KnorpelSenf/typegram)).
 While most types of Telegraf's API surface are self-explanatory, there's some notable things to keep in mind.
 
 #### Extending `Context`
