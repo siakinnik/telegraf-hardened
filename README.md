@@ -19,6 +19,7 @@ Telegraf-hardened - Community-led fork of Telegraf.js. Focusing on stability, st
 ## ❤️ Special Thanks
 
 This fork exists and improves thanks to the amazing contributors:
+
 -   **[@Leask](https://github.com/Leask)** - Full Bot API 9.6 sync, modernization of the entire network stack, and bulletproof API-sync testing.
 -   **[@BataevDaniil](https://github.com/BataevDaniil)** - Architect of the `custom-fetch` feature.
 -   **[@clansty](https://github.com/clansty)** - Critical JSON serialization and thumbnail fixes.
@@ -132,17 +133,16 @@ const bot = new Telegraf(process.env.BOT_TOKEN, {
 })
 
 // For authenticated proxies:
-// proxy: '[http://user:pass@1.2.3.4:8080](http://user:pass@1.2.3.4:8080)'
+// proxy: 'http://user:pass@1.2.3.4:8080'
 ```
 
 ### Features
 
 -   Full [Telegram Bot API 10.3](https://core.telegram.org/bots/api) support (all 185 methods), with runtime payload and TypeScript contract tests
--   [Excellent TypeScript typings](https://github.com/telegraf-hardened/telegraf-hardened/releases/tag/v5.0.0-beta.3)
+-   [Excellent TypeScript typings](https://www.npmjs.com/package/@telegraf-hardened/types)
 -   Lightweight: compare with [node-telegram-bot-api](https://packagephobia.com/result?p=telegraf-hardened,node-telegram-bot-api) or [original telegraf](https://packagephobia.com/result?p=telegraf-hardened,telegraf)
 -   [AWS **λ**](https://docs.aws.amazon.com/lambda/latest/dg/nodejs-prog-model-handler.html)
     / [Firebase](https://firebase.google.com/products/functions/)
-    / [Glitch](https://glitch.com/edit/#!/dashing-light)
     / [Fly.io](https://fly.io/docs/languages-and-frameworks/node)
     / Whatever ready
 -   `http/https/fastify/Connect.js/express.js` compatible webhooks
@@ -183,7 +183,12 @@ const bot = new Telegraf(process.env.BOT_TOKEN)
     bot.command('vip', (ctx) =>
         ctx.telegram.sendPaidMedia(
             ctx.chat.id,
-            [{ type: 'photo', media: Input.fromLocalFile('./premium_content.jpg') }],
+            [
+                {
+                    type: 'photo',
+                    media: Input.fromLocalFile('./premium_content.jpg'),
+                },
+            ],
             50
         )
     )
@@ -366,11 +371,11 @@ In production environments (Docker, PM2, K8s), a quick restart might trigger a `
 
 ```ts
 bot.launch({
-  polling: {
-    retryOnConflict: true, // Enable exponential backoff on 409 errors
-    maxRetryDelay: 30000,  // Cap retry delay at 30 seconds (default 60s)
-  },
-});
+    polling: {
+        retryOnConflict: true, // Enable exponential backoff on 409 errors
+        maxRetryDelay: 30000, // Cap retry delay at 30 seconds (default 60s)
+    },
+})
 ```
 
 ### Webhooks
@@ -427,6 +432,8 @@ createServer(tlsOptions, await bot.createWebhook({ domain: "example.com" })).lis
 -   [NestJS framework integration module](https://github.com/bukhalo/nestjs-telegraf)
 -   [Cloudflare Workers integration module](https://github.com/Tsuk1ko/cfworker-middware-telegraf)
 -   Use [`bot.handleUpdate`](https://telegraf.js.org/classes/Telegraf-1.html#handleupdate) to write new integrations
+
+> Examples above use the original `telegraf` package — replace imports with `telegraf-hardened`.
 
 ### Error handling
 
@@ -491,7 +498,7 @@ Supported file sources:
 
 Also, you can provide an optional name of a file as `filename` when you send the file.
 
-<!-- global bot, fs -->
+<!-- global bot, fs, Input -->
 
 ```js
 bot.on('message', async (ctx) => {
@@ -507,7 +514,7 @@ bot.on('message', async (ctx) => {
     )
 
     // send buffer
-    await ctx.replyWithVoice(Input.fromBuffer(Buffer.alloc()))
+    await ctx.replyWithVoice(Input.fromBuffer(Buffer.alloc(0)))
 
     // send url via Telegram server
     await ctx.replyWithPhoto(Input.fromURL('https://picsum.photos/200/300/'))
@@ -595,7 +602,10 @@ const bot = new Telegraf<MyContext>('SECRET TOKEN')
 // Register middleware and launch your bot as usual
 bot.use((ctx, next) => {
     // Yay, `myProp` is now available here as `string | undefined`!
-    ctx.myProp = ctx.chat?.first_name?.toUpperCase()
+    ctx.myProp =
+        ctx.chat?.type === 'private'
+            ? ctx.chat.first_name.toUpperCase()
+            : undefined
     return next()
 })
 // ...
